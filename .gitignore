@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Types the Claude Code engine lays into a loaded mod (regenerated on load)
+plugins/*/.claude-plugin/types/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# Logs and test output
+*.log
+coverage/
