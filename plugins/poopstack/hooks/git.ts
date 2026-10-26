@@ -1,18 +1,29 @@
-// Recognising a commit the mod can confirm. A Bash call's exit status confirms a commit only when
-// the call is one plain `git commit`: a compound, piped or backgrounded command could succeed
-// while its commit failed, or fail after it succeeded, so the mod cannot tell and stays quiet.
+// Whether a Bash call made a commit, by the engine's own account. Claude Code reports git's effect
+// on the call's result (`gitOperation.commit`, with the new commit's sha), whatever shape the
+// command had: a chain, a pipe, a heredoc message. Reading the command's text instead missed
+// about a third of real commits (measured 2026-10-26 over 30 days of transcripts: 202 of 502
+// commit commands passed the text check; the engine recorded 300 commits). A call that made no
+// commit, or whose report is missing, is not a commit to joke about.
 
-// Quoted text (a commit message, a `$(cat <<'EOF' … EOF)` body inside double quotes) cannot
-// change what runs, so it is set aside before the command's own shape is read.
-const QUOTED = /'[^']*'|"(?:\\.|[^"\\])*"/g;
-const SEPARATOR = /[;&|\n`]|\$\(/;
-const COMMIT = /^\s*git(?:\s+-[cC]\s+\S+)*\s+commit(?:\s|$)/;
-const DRY_RUN = /\s--dry-run\b/;
+export type CommitKind = 'committed' | 'amended';
 
-export function isPlainCommit(command: string, isBackground: boolean): boolean {
-  if (isBackground) {
-    return false;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// A cherry-pick also makes a commit, but not one Claude composed; it is left out.
+export function commitKind(result: unknown): CommitKind | null {
+  if (!isRecord(result)) {
+    return null;
   }
-  const bare = command.replace(QUOTED, "''");
-  return COMMIT.test(bare) && !SEPARATOR.test(bare) && !DRY_RUN.test(bare);
+  const { gitOperation } = result;
+  if (!isRecord(gitOperation)) {
+    return null;
+  }
+  const { commit } = gitOperation;
+  if (!isRecord(commit)) {
+    return null;
+  }
+  const { kind } = commit;
+  return kind === 'committed' || kind === 'amended' ? kind : null;
 }

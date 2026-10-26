@@ -1,5 +1,5 @@
 import type { EngineInterface, Register, RenderPropsOf, RenderSurface } from 'claude-code';
-import { isPlainCommit } from './git';
+import { commitKind } from './git';
 import {
   describeRate,
   isPreset,
@@ -25,12 +25,17 @@ const TURN_MISSES = { plugin: 'poopstack', key: 'turnMisses' } as const;
 const COMMIT_MISSES = { plugin: 'poopstack', key: 'commitMisses' } as const;
 const COMMIT_JOKES = { plugin: 'poopstack', key: 'commitJokes' } as const;
 
-// $.store, machine-wide: whether the first-run toast has been shown on this machine.
-const FIRST_RUN = 'firstRunShown';
+// $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
+// typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
+// removed when this one is written.
+const FIRST_RUN = 'firstRunSeen';
+const FIRST_RUN_BEFORE = 'firstRunShown';
 
 // Set at each load's session.start; a reload starts them over.
 let isInteractive = false;
 let isFirstRunChecked = false;
+// Set by a prompt he typed (`prompt.submit` from the composer); read at that turn's end.
+let isTypedTurn = false;
 const owned = new Set<string>();
 const constants = new Map<number, number>();
 
@@ -185,6 +190,7 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
     return;
   }
   await $.store.set(FIRST_RUN, true);
+  await $.store.delete(FIRST_RUN_BEFORE);
   $.ui.toast(
     `Sanitized for your protection. Jokes on ${describeRate(turnRate(settings))}; /poop off stops them.`,
   );
@@ -348,21 +354,29 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
     if (e.agentId === undefined) {
+      const wasTyped = isTypedTurn;
+      isTypedTurn = false;
       await drawTurn($, settings);
-      await firstRun($, settings);
+      if (wasTyped) {
+        await firstRun($, settings);
+      }
     }
     return result;
   }).catch((_$, e, next) => next(e));
 
+  // An observer: the prompt goes on unchanged; only where it came from is noted.
+  on('prompt.submit', async (_$, e, next) => {
+    const result = await next(e);
+    if (e.origin.kind === 'composer' && e.isMeta !== true) {
+      isTypedTurn = true;
+    }
+    return result;
+  }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+
   // An observer: the call runs first and its result returns unchanged.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e);
-    const isConfirmed = result.deny === undefined && result.isError !== true;
-    if (
-      e.tool === 'Bash' &&
-      isConfirmed &&
-      isPlainCommit(e.command, e.run_in_background === true)
-    ) {
+    if (result.deny === undefined && commitKind(result.result) !== null) {
       await commitJoke($, settings);
     }
     return result;

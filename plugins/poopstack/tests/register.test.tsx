@@ -22,13 +22,22 @@ const CLOSING = {
   props: { word: 'Brewed', durationMs: 16_000 },
 } as const;
 
-type Seen = { toasts: string[]; configSets: string[] };
+type Seen = {
+  toasts: string[];
+  configSets: string[];
+  storeSets: string[];
+  storeDeletes: string[];
+};
 
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
 // they were handed, so a test reads what the mod passed on. `holder` names who registered each
 // visible name (another plugin can hold one).
-function engine(on: On, holder: (name: string) => string = () => 'poopstack'): Seen {
-  const seen: Seen = { toasts: [], configSets: [] };
+function engine(
+  on: On,
+  holder: (name: string) => string = () => 'poopstack',
+  stored: unknown = true,
+): Seen {
+  const seen: Seen = { toasts: [], configSets: [], storeSets: [], storeDeletes: [] };
   on('command.register', (_, e) => ({ value: { command: e.name } }));
   on('command.list', () => ({
     value: NAMES.map((name) => ({ name, description: '', source: 'plugin', plugin: holder(name) })),
@@ -51,8 +60,15 @@ function engine(on: On, holder: (name: string) => string = () => 'poopstack'): S
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.id', () => ({ value: 'session-1' }));
   on('clock.now', () => ({ value: 1_000 }));
-  on('store.get', () => ({ value: true }));
-  on('store.set', () => ({ value: undefined }));
+  on('store.get', () => ({ value: stored }));
+  on('store.set', (_, e) => {
+    seen.storeSets.push(e.key);
+    return { value: undefined };
+  });
+  on('store.delete', (_, e) => {
+    seen.storeDeletes.push(e.key);
+    return { value: undefined };
+  });
   on('ui.toast', (_, e) => {
     seen.toasts.push(e.text);
     return { value: undefined };
@@ -197,35 +213,89 @@ test(
   },
 );
 
+// The engine's own report of a Bash call that made a commit (claude-code-tools, `gitOperation`).
+const COMMITTED = {
+  result: {
+    stdout: '[main c938bc3] feat: x',
+    stderr: '',
+    interrupted: false,
+    gitOperation: { commit: { sha: 'c938bc3', kind: 'committed', branch: 'main' } },
+  },
+} as const;
+const NOTHING = { result: { stdout: '', stderr: '', interrupted: false } } as const;
+
+// How Claude usually commits: a chain, and a message in a heredoc with quotes inside it.
+const CLAUDE_STYLE = [
+  "git add hooks/pick.ts && git commit -m \"$(cat <<'EOF'",
+  'feat(core): add the bag',
+  '',
+  'His words: "Don\'t cancel the nudge."',
+  '',
+  'Co-Authored-By: Claude <noreply@anthropic.com>',
+  'EOF',
+  ')" 2>&1 | tail -n 20',
+].join('\n');
+
 test(
-  'confirmed commits show his two lines in order, then the first again',
+  'commits the engine reports show his two lines in order, then the first again',
   { options: ALWAYS },
   async ($, on) => {
     const seen = engine(on);
-    on('tool.call', () => ({ result: {} }));
+    on('tool.call', () => COMMITTED);
     await start($);
-    const commit = { tool: 'Bash', command: 'git commit -m "feat: x"' } as const;
-    await $.tool.call(commit);
-    await $.tool.call(commit);
-    await $.tool.call(commit);
+    await $.tool.call({ tool: 'Bash', command: CLAUDE_STYLE });
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await $.tool.call({ tool: 'Bash', command: 'git commit --amend --no-edit' });
     expect(seen.toasts).toEqual([COMMIT_FIRST, COMMIT_SECOND, COMMIT_FIRST]);
   },
 );
 
 test(
-  'a failed or compound commit shows nothing, and the result passes on unchanged',
+  'a call the engine reports no commit for shows nothing, and its result passes on unchanged',
   { options: ALWAYS },
   async ($, on) => {
     const seen = engine(on);
-    on('tool.call', (_, e) =>
-      e.tool === 'Bash' && e.command.includes('fail')
-        ? { result: {}, isError: true, text: 'exit 1' }
-        : { result: {} },
-    );
+    on('tool.call', () => ({ ...NOTHING, isError: true, text: 'exit 1' }));
     await start($);
-    const failed = await $.tool.call({ tool: 'Bash', command: 'git commit -m fail' });
-    await $.tool.call({ tool: 'Bash', command: 'git add . && git commit -m x' });
+    const failed = await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
     expect(failed.isError).toBe(true);
+    expect(failed.text).toBe('exit 1');
     expect(seen.toasts).toEqual([]);
+  },
+);
+
+const TURN = {
+  turnId: 'turn-1',
+  answer: 'done',
+  durationMs: 1_000,
+  isAborted: false,
+  reason: 'answer',
+  text: 'done',
+} as const;
+
+test(
+  'the first-run toast waits for a turn he typed, then shows once',
+  { options: ALWAYS },
+  async ($, on) => {
+    // Nothing stored yet on this machine: the store answers null.
+    const seen = engine(on, () => 'poopstack', null);
+    on('prompt.submit', (_, e) => ({ text: e.text }));
+    on('turn.complete', (_, e) => ({ text: e.text }));
+    await start($);
+    await $.prompt.submit({
+      text: 'cache nudge: reply one line, no work',
+      origin: { kind: 'scheduled-trigger' },
+      wait: false,
+    });
+    await $.turn.complete(TURN);
+    expect(seen.toasts).toEqual([]);
+    await $.prompt.submit({ text: 'hello', origin: { kind: 'composer' }, wait: false });
+    await $.turn.complete(TURN);
+    await $.prompt.submit({ text: 'again', origin: { kind: 'composer' }, wait: false });
+    await $.turn.complete(TURN);
+    expect(seen.toasts.length).toBe(1);
+    expect(seen.toasts[0]?.startsWith('Sanitized for your protection.')).toBe(true);
+    expect(seen.storeSets).toEqual(['firstRunSeen']);
+    expect(seen.storeDeletes).toEqual(['firstRunShown']);
   },
 );
