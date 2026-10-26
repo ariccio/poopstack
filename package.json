@@ -1,0 +1,37 @@
+{
+  "name": "poopstack-dev",
+  "private": true,
+  "description": "Development tooling for the p(oop)stack Claude Code mod; the mod itself lives in plugins/poopstack and ships no dependencies.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.19.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=10.19.0"
+  },
+  "scripts": {
+    "lint": "biome check --error-on-warnings .",
+    "fix": "biome check --write .",
+    "check:ast": "ast-grep scan",
+    "typecheck": "tsc -p plugins/poopstack",
+    "test:scripts": "zsh scripts/git/validate-commit-message.test.zsh && zsh scripts/git/git-improvements.test.zsh",
+    "plugin:validate": "zsh scripts/quality/claude-plugin.zsh validate",
+    "plugin:test": "zsh scripts/quality/claude-plugin.zsh test",
+    "security:gitleaks": "zsh scripts/quality/security-gitleaks.zsh",
+    "security:gitleaks:staged": "zsh scripts/quality/security-gitleaks.zsh --staged",
+    "hooks:install": "lefthook install"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@ast-grep/cli"
+    ],
+    "ignoredBuiltDependencies": [
+      "lefthook"
+    ]
+  },
+  "devDependencies": {
+    "@ast-grep/cli": "0.44.1",
+    "@biomejs/biome": "2.5.2",
+    "lefthook": "2.1.10",
+    "typescript": "5.9.2"
+  }
+}

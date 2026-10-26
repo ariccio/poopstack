@@ -1,0 +1,11 @@
+{
+  "name": "poopstack",
+  "displayName": "p(oop)stack",
+  "version": "0.0.0",
+  "description": "Claude Code's progress words, as bathroom puns that never hide what Claude is really doing.",
+  "author": { "name": "Alexander Riccio" },
+  "homepage": "https://github.com/ariccio/poopstack",
+  "repository": "https://github.com/ariccio/poopstack",
+  "license": "MIT",
+  "keywords": ["claude-code-mod", "humor", "spinner"]
+}

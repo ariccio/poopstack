@@ -1,0 +1,13 @@
+{
+  "name": "poopstack",
+  "owner": { "name": "Alexander Riccio" },
+  "description": "p(oop)stack, a Claude Code mod of bathroom puns, from its own repository.",
+  "plugins": [
+    {
+      "name": "poopstack",
+      "displayName": "p(oop)stack",
+      "source": "./plugins/poopstack",
+      "description": "Claude Code's progress words, as bathroom puns that never hide what Claude is really doing."
+    }
+  ]
+}

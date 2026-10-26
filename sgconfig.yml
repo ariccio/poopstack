@@ -1,0 +1,4 @@
+# ast-grep project config: structural bans that mechanize .claude/rules/error-handling.md.
+# Run: pnpm check:ast
+ruleDirs:
+  - ast-grep-rules

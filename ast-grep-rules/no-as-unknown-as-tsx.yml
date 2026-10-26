@@ -1,0 +1,13 @@
+id: no-as-unknown-as-tsx
+language: Tsx
+severity: error
+message: "`as unknown as T` double cast bypasses every type check — validate the value and narrow it instead"
+note: >-
+  The Tsx twin of no-as-unknown-as (ast-grep parses .tsx files as their own language, so a TypeScript rule never sees them).
+  Type honesty (.claude/rules/error-handling.md): a double cast bypasses every check the types would have made; validate the value instead.
+files:
+  - "plugins/**/*.tsx"
+rule:
+  any:
+    - pattern: $EXPR as unknown as $TYPE
+    - pattern: ($EXPR as unknown) as $TYPE

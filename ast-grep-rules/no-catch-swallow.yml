@@ -1,0 +1,21 @@
+id: no-catch-swallow
+language: TypeScript
+severity: error
+message: "catch that neither rethrows, returns a typed error, nor passes the event on is a swallow — the failure disappears silently"
+note: >-
+  Error handling (.claude/rules/error-handling.md): a catch that neither rethrows, returns an error, nor passes the event on is a swallow. Branch A: a bare `return;` directly in the catch body (a valued return is not flagged); B: an assignment-only body; C: a console-only body. No flow analysis: a bare return nested inside an `if` in the catch, logger-only and multi-statement swallows, and comment-only bodies are out of reach and fall to review.
+files:
+  - "plugins/**/*.ts"
+rule:
+  any:
+    - all:
+        - kind: return_statement
+        - regex: "^return\\s*;?\\s*$"
+        - inside:
+            kind: statement_block
+            inside:
+              kind: catch_clause
+    - pattern: "try { $$$BODY } catch ($E) { $VAR = $VAL }"
+    - pattern: "try { $$$BODY } catch { $VAR = $VAL }"
+    - pattern: "try { $$$BODY } catch ($E) { console.$M($$$ARGS) }"
+    - pattern: "try { $$$BODY } catch { console.$M($$$ARGS) }"

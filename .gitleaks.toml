@@ -1,0 +1,7 @@
+# Secret-scanning config. Extends gitleaks' maintained built-in ruleset.
+#
+# Never add an allowlist entry for anything that looks like a real secret:
+# surface it and rotate it instead. Allowlist only provable non-secrets
+# (test fixtures, documented example keys), each with its reason.
+[extend]
+useDefault = true

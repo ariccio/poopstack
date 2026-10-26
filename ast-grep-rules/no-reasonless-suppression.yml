@@ -1,0 +1,20 @@
+id: no-reasonless-suppression
+language: TypeScript
+severity: error
+message: "linter suppression without a reason is an unaccountable override — add ': why' (biome-ignore) or ' -- why' (eslint-disable) so the next reader sees the justification"
+note: >-
+  Suppression hygiene (.claude/rules/error-handling.md): every suppression carries its reason. ast-grep's Rust regex has no lookahead, so each branch is kind:comment + an anchored directive regex + a `not` on the reason shape (`: <text>` for biome-ignore, `-- <text>` for eslint-disable).
+files:
+  - "plugins/**/*.ts"
+rule:
+  any:
+    - all:
+        - kind: comment
+        - regex: "^(//|/\\*+)\\s*biome-ignore"
+        - not:
+            regex: ":\\s*\\S"
+    - all:
+        - kind: comment
+        - regex: "^(//|/\\*+)\\s*eslint-disable"
+        - not:
+            regex: "--\\s*\\S"

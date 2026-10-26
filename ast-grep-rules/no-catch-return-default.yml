@@ -1,0 +1,19 @@
+id: no-catch-return-default
+language: TypeScript
+severity: error
+message: "catch converting a failure into a plausible-looking default hides the error — rethrow, return a typed error, or pass the event on unchanged (next(e)) where the hook contract allows"
+note: >-
+  Error handling (.claude/rules/error-handling.md): no success-shaped defaults. A catch that returns a plausible value (null, [], 0, '', false, true, NaN, {}) hides the failure behind something that looks like an answer.
+files:
+  - "plugins/**/*.ts"
+rule:
+  any:
+    - pattern: "try { $$$BODY } catch ($E) { return null }"
+    - pattern: "try { $$$BODY } catch ($E) { return undefined }"
+    - pattern: "try { $$$BODY } catch ($E) { return [] }"
+    - pattern: "try { $$$BODY } catch ($E) { return {} }"
+    - pattern: "try { $$$BODY } catch ($E) { return 0 }"
+    - pattern: "try { $$$BODY } catch ($E) { return false }"
+    - pattern: "try { $$$BODY } catch ($E) { return true }"
+    - pattern: "try { $$$BODY } catch ($E) { return '' }"
+    - pattern: "try { $$$BODY } catch ($E) { return NaN }"

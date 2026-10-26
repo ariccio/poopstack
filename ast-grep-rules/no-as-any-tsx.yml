@@ -1,0 +1,11 @@
+id: no-as-any-tsx
+language: Tsx
+severity: error
+message: "`as any` escapes the type system entirely — use a proper type, a validating constructor, or fix the underlying type"
+note: >-
+  The Tsx twin of no-as-any (ast-grep parses .tsx files as their own language, so a TypeScript rule never sees them).
+  Type honesty (.claude/rules/error-handling.md): `as any` leaves the type system entirely.
+files:
+  - "plugins/**/*.tsx"
+rule:
+  pattern: $EXPR as any

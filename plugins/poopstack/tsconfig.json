@@ -1,0 +1,28 @@
+{
+  // The engine lays ./.claude-plugin/types/ (and its tsconfig.json) when it loads the mod;
+  // `tsc -p plugins/poopstack` runs only where that has happened (a local checkout loaded
+  // through --plugin-dir or a session's mods folder), never in CI.
+  // This file adds the repository's strictness battery on top. Back off one flag at a time,
+  // and only on evidence.
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedSideEffectImports": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "declaration": true,
+    "isolatedDeclarations": true,
+    "skipLibCheck": false
+  }
+}
