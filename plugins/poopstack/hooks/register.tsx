@@ -1,4 +1,5 @@
 import type { EngineInterface, Register, RenderPropsOf, RenderSurface } from 'claude-code';
+import { COMMIT_COUNT_PREFIX, commitCountKey, isStale, shownSoFar } from './commits';
 import { commitKind } from './git';
 import {
   describeRate,
@@ -23,7 +24,6 @@ const PHRASE = { plugin: 'poopstack', key: 'phrase' } as const;
 const BAG = { plugin: 'poopstack', key: 'bag' } as const;
 const TURN_MISSES = { plugin: 'poopstack', key: 'turnMisses' } as const;
 const COMMIT_MISSES = { plugin: 'poopstack', key: 'commitMisses' } as const;
-const COMMIT_JOKES = { plugin: 'poopstack', key: 'commitJokes' } as const;
 
 // $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
 // typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
@@ -98,7 +98,6 @@ async function ensureSession($: EngineInterface, settings: Settings): Promise<vo
     COMMIT_MISSES,
     warmMisses(constantFor(matchedRate(settings)), commitDice.value),
   );
-  await $.state.set(COMMIT_JOKES, 0);
   await $.state.set(BAG, []);
   await $.state.set(RNG, commitDice.state);
   await drawTurn($, settings);
@@ -174,9 +173,22 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
   if (!result.isHit) {
     return;
   }
-  const shown = need((await $.state.get(COMMIT_JOKES)).value, 'commitJokes');
-  await $.state.set(COMMIT_JOKES, shown + 1);
+  const key = commitCountKey(await $.session.id());
+  const shown = shownSoFar(key, await $.store.get(key));
+  await $.store.set(key, { shown: shown + 1, at: await $.clock.now() });
   $.ui.toast(commitLine(shown, settings.preset));
+}
+
+// Removes the commit counts of sessions untouched past the keep bound (hooks/commits.ts).
+async function pruneCommitCounts($: EngineInterface, settings: Settings): Promise<void> {
+  if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
+    return;
+  }
+  const now = await $.clock.now();
+  const keys = (await $.store.keys()).filter((key) => key.startsWith(COMMIT_COUNT_PREFIX));
+  const counts = await Promise.all(keys.map((key) => $.store.get(key)));
+  const stale = keys.filter((key, index) => isStale(key, counts[index], now));
+  await Promise.all(stale.map((key) => $.store.delete(key)));
 }
 
 // --- the first run on this machine -------------------------------------------------------------
@@ -348,6 +360,7 @@ export const register: Register = (on, options) => {
     isInteractive = e.isInteractive;
     await reconcileOff($, settings);
     await ensureSession($, settings);
+    await pruneCommitCounts($, settings);
     return result;
   }).catch((_$, e, next) => next(e));
 

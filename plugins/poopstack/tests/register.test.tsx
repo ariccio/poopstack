@@ -1,4 +1,5 @@
 import { expect, type TestBody, test } from 'claude-code/testing';
+import { COMMIT_COUNT_KEEP_MS } from '../hooks/commits';
 import { COMMIT_FIRST, COMMIT_SECOND, poolFor } from '../hooks/vocabulary';
 
 type Engine = Parameters<TestBody>[0];
@@ -29,15 +30,21 @@ type Seen = {
   storeDeletes: string[];
 };
 
+// The machine-wide store as a test starts it: by default the first-run toast was already seen.
+const SEEN_BEFORE = { firstRunSeen: true } as const;
+// Late enough that a count older than the keep bound still has a time after the epoch.
+const NOW = 2 * COMMIT_COUNT_KEEP_MS;
+
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
 // they were handed, so a test reads what the mod passed on. `holder` names who registered each
-// visible name (another plugin can hold one).
+// visible name (another plugin can hold one); `stored` is the store before the session starts.
 function engine(
   on: On,
   holder: (name: string) => string = () => 'poopstack',
-  stored: unknown = true,
+  stored: Readonly<Record<string, unknown>> = SEEN_BEFORE,
 ): Seen {
   const seen: Seen = { toasts: [], configSets: [], storeSets: [], storeDeletes: [] };
+  const store = new Map<string, unknown>(Object.entries(stored));
   on('command.register', (_, e) => ({ value: { command: e.name } }));
   on('command.list', () => ({
     value: NAMES.map((name) => ({ name, description: '', source: 'plugin', plugin: holder(name) })),
@@ -59,16 +66,19 @@ function engine(
   });
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.id', () => ({ value: 'session-1' }));
-  on('clock.now', () => ({ value: 1_000 }));
-  on('store.get', () => ({ value: stored }));
+  on('clock.now', () => ({ value: NOW }));
+  on('store.get', (_, e) => ({ value: store.get(e.key) }));
   on('store.set', (_, e) => {
     seen.storeSets.push(e.key);
+    store.set(e.key, e.value);
     return { value: undefined };
   });
   on('store.delete', (_, e) => {
     seen.storeDeletes.push(e.key);
+    store.delete(e.key);
     return { value: undefined };
   });
+  on('store.keys', () => ({ value: [...store.keys()] }));
   on('ui.toast', (_, e) => {
     seen.toasts.push(e.text);
     return { value: undefined };
@@ -250,6 +260,57 @@ test(
   },
 );
 
+// A test's $.state starts empty, as a process resumed with `claude --resume` does
+// (hooks/commits.ts); the store stands for what the session's earlier process kept.
+test(
+  'a session resumed in a new process carries on its pair from the store',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on, () => 'poopstack', {
+      ...SEEN_BEFORE,
+      'commitJokes.session-1': { shown: 1, at: NOW - 1 },
+      'commitJokes.session-2': { shown: 0, at: NOW - 1 },
+    });
+    on('tool.call', () => COMMITTED);
+    await start($);
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: y"' });
+    expect(seen.toasts).toEqual([COMMIT_SECOND, COMMIT_FIRST]);
+    expect(seen.storeSets).toEqual(['commitJokes.session-1', 'commitJokes.session-1']);
+  },
+);
+
+test(
+  "a session's start removes only the counts untouched past the keep bound",
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on, () => 'poopstack', {
+      ...SEEN_BEFORE,
+      'commitJokes.old': { shown: 2, at: NOW - COMMIT_COUNT_KEEP_MS - 1 },
+      'commitJokes.recent': { shown: 1, at: NOW - COMMIT_COUNT_KEEP_MS },
+    });
+    await start($);
+    expect(seen.storeDeletes).toEqual(['commitJokes.old']);
+  },
+);
+
+test(
+  'turned off in settings, the store is left alone',
+  { options: { ...ALWAYS, enabled: false } },
+  async ($, on) => {
+    const seen = engine(on, () => 'poopstack', {
+      ...SEEN_BEFORE,
+      'commitJokes.old': { shown: 2, at: NOW - COMMIT_COUNT_KEEP_MS - 1 },
+    });
+    on('tool.call', () => COMMITTED);
+    await start($);
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    expect(seen.storeSets).toEqual([]);
+    expect(seen.storeDeletes).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+  },
+);
+
 test(
   'a call the engine reports no commit for shows nothing, and its result passes on unchanged',
   { options: ALWAYS },
@@ -277,8 +338,8 @@ test(
   'the first-run toast waits for a turn he typed, then shows once',
   { options: ALWAYS },
   async ($, on) => {
-    // Nothing stored yet on this machine: the store answers null.
-    const seen = engine(on, () => 'poopstack', null);
+    // Nothing stored yet on this machine.
+    const seen = engine(on, () => 'poopstack', {});
     on('prompt.submit', (_, e) => ({ text: e.text }));
     on('turn.complete', (_, e) => ({ text: e.text }));
     await start($);

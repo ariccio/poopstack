@@ -1,4 +1,6 @@
-// What p(oop)stack keeps in $.state, one set per session; it survives reloads and compactions.
+// What p(oop)stack keeps in $.state, one set per session; it survives reloads and compactions,
+// but not a restart with `claude --resume` (observed 2026-10-26), so the commit count lives in
+// $.store instead (hooks/commits.ts).
 //
 // isOff: `/poopstack off` was asked in this session; stops every rewrite at once, before the
 //   module reloads with `enabled` false, and stays set if the setting could not be written.
@@ -8,7 +10,6 @@
 // phrase: the base phrase of the running or next main turn; null when that turn is plain.
 // bag: the phrases still to come before the vocabulary repeats.
 // turnMisses, commitMisses: rolls since each channel's dice last hit.
-// commitJokes: commit lines shown this session.
 
 export type TurnPhrase = string | null;
 
@@ -22,7 +23,6 @@ declare module 'claude-code' {
       bag: readonly string[];
       turnMisses: number;
       commitMisses: number;
-      commitJokes: number;
     };
   }
 }
