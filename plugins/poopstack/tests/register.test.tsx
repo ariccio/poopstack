@@ -676,3 +676,25 @@ test(
     expect(outcome.startsWith('HooksError')).toBe(true);
   },
 );
+
+test(
+  'a failure inside the mod after a commit ran does not run the commit again',
+  { options: ALWAYS },
+  async ($, on) => {
+    // A stored count this mod could not have written makes the commit line throw after the call
+    // settled; the hook's catch then hands back the settled answer without calling again.
+    const stored = { ...SEEN_BEFORE, 'commitJokes.session-1': 'malformed' };
+    const seen = engine(on, () => 'poopstack', stored);
+    let calls = 0;
+    on('tool.call', () => {
+      calls += 1;
+      return COMMITTED;
+    });
+    await start($);
+    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
+      COMMITTED,
+    );
+    expect(calls).toBe(1);
+    expect(seen.toasts).toEqual([]);
+  },
+);
