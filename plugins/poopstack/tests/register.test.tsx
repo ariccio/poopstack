@@ -48,6 +48,10 @@ const SEEN_BEFORE = { firstRunSeen: true } as const;
 // Late enough that a count older than the keep bound still has a time after the epoch.
 const NOW = 2 * COMMIT_COUNT_KEEP_MS;
 
+// How the stand-in answers /config: `savedAs` is what a config hook changed the value to on its
+// way in; `isListFailing` makes the list throw (the kit then rejects the call).
+type ConfigStandIn = { readonly savedAs?: boolean | string; readonly isListFailing?: boolean };
+
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
 // they were handed, so a test reads what the mod passed on. `holder` names who registered each
 // visible name (another plugin can hold one); `stored` is the store before the session starts.
@@ -55,6 +59,7 @@ function engine(
   on: On,
   holder: (name: string) => string = () => 'poopstack',
   stored: Readonly<Record<string, unknown>> = SEEN_BEFORE,
+  config: ConfigStandIn = {},
 ): Seen {
   const seen: Seen = { toasts: [], configSets: [], storeSets: [], storeDeletes: [] };
   const store = new Map<string, unknown>(Object.entries(stored));
@@ -63,19 +68,24 @@ function engine(
     value: NAMES.map((name) => ({ name, description: '', source: 'plugin', plugin: holder(name) })),
   }));
   on('command.run', () => ({ text: 'answered by the other plugin' }));
-  on('config.list', () => ({
-    value: ['enabled', 'preset', 'engagement'].map((field) => ({
-      key: `poopstack.${field}`,
-      label: field,
-      kind: 'boolean',
-      value: true,
-      provider: { plugin: 'poopstack', tier: 'user' },
-      isLocked: false,
-    })),
-  }));
+  on('config.list', () => {
+    if (config.isListFailing === true) {
+      throw new Error('the config list failed');
+    }
+    return {
+      value: ['enabled', 'preset', 'engagement'].map((field) => ({
+        key: `poopstack.${field}`,
+        label: field,
+        kind: 'boolean',
+        value: true,
+        provider: { plugin: 'poopstack', tier: 'user' },
+        isLocked: false,
+      })),
+    };
+  });
   on('config.set', (_, e) => {
     seen.configSets.push(`${e.key}=${String(e.value)}`);
-    return { value: e.value };
+    return { value: config.savedAs ?? e.value };
   });
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.id', () => ({ value: 'session-1' }));
@@ -696,5 +706,46 @@ test(
     );
     expect(calls).toBe(1);
     expect(seen.toasts).toEqual([]);
+  },
+);
+
+test(
+  '/poop off reports a setting saved as something else, and fails a headless run',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on, () => 'poopstack', SEEN_BEFORE, { savedAs: true });
+    await start($);
+    const result = await $.command.run(run('poop', 'off'));
+    expect(result.text.startsWith('Jokes stopped for this session only')).toBe(true);
+    expect(result.text.includes('it was saved as true')).toBe(true);
+    expect(result.exitCode).toBe(1);
+    expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
+  },
+);
+
+test(
+  '/poopstack on and a preset report a refused or changed setting',
+  { options: { ...ALWAYS, enabled: false } },
+  async ($, on) => {
+    engine(on, () => 'poopstack', SEEN_BEFORE, { savedAs: false });
+    await start($);
+    const turnedOn = await $.command.run(run('poopstack', 'on'));
+    expect(turnedOn.text.startsWith('Not turned on')).toBe(true);
+    expect(turnedOn.exitCode).toBe(1);
+    const preset = await $.command.run(run('poopstack', 'maximum'));
+    expect(preset.text.startsWith('The preset stays regular')).toBe(true);
+    expect(preset.exitCode).toBe(1);
+  },
+);
+
+test(
+  "a failure inside the mod's own command says so and fails a headless run",
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on, () => 'poopstack', SEEN_BEFORE, { isListFailing: true });
+    await start($);
+    const result = await $.command.run(run('poop', 'off'));
+    expect(result.text.startsWith('The command failed inside p(oop)stack')).toBe(true);
+    expect(result.exitCode).toBe(1);
   },
 );

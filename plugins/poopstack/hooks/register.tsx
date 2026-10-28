@@ -380,53 +380,63 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
 
 // --- the command -------------------------------------------------------------------------------
 
-type ConfigOutcome = { readonly deny?: string | undefined };
+// A command's answer. `exitCode` reaches only a headless run whose whole prompt was the command
+// (`claude -p "/poopstack off"`); 1 says it did not do all it was asked: a setting not saved as
+// asked, or a failure inside the mod.
+type Answer = { readonly text: string; readonly exitCode?: number };
+const FAILED_EXIT = 1;
 
 // Changes one of this plugin's /config rows; the engine reloads the module with the new value.
+// Null when the row now holds the value asked for; otherwise why not: refused, or saved as
+// something else (a config hook may change a value on its way in).
 async function setOption(
   $: EngineInterface,
   field: string,
   value: boolean | string,
-): Promise<ConfigOutcome> {
+): Promise<string | null> {
   const rows = await $.config.list();
   const row = rows.find(
     (candidate) =>
       candidate.provider.plugin === $.plugin.name && candidate.key.endsWith(`.${field}`),
   );
   if (row === undefined) {
-    return { deny: `no /config row named ${field} was found for ${$.plugin.name}` };
+    return `no /config row named ${field} was found for ${$.plugin.name}`;
   }
-  return $.config.set({ key: row.key, value });
+  const outcome = await $.config.set({ key: row.key, value });
+  if (outcome.deny !== undefined) {
+    return outcome.deny;
+  }
+  return outcome.value === value ? null : `it was saved as ${JSON.stringify(outcome.value)}`;
 }
 
-async function turnOff($: EngineInterface): Promise<{ text: string }> {
+async function turnOff($: EngineInterface): Promise<Answer> {
   await $.state.set(IS_OFF, true);
-  const outcome = await setOption($, 'enabled', false);
-  if (outcome.deny !== undefined) {
+  const problem = await setOption($, 'enabled', false);
+  if (problem !== null) {
     return {
-      text: `Jokes stopped for this session only: the setting was not saved (${outcome.deny}).`,
+      text: `Jokes stopped for this session only: the setting was not saved (${problem}).`,
+      exitCode: FAILED_EXIT,
     };
   }
   return { text: "Off. Claude Code's own words are back; /poopstack on brings the jokes back." };
 }
 
-async function turnOn($: EngineInterface, settings: Settings): Promise<{ text: string }> {
+async function turnOn($: EngineInterface, settings: Settings): Promise<Answer> {
   await $.state.set(IS_OFF, false);
-  const outcome = settings.isEnabled ? {} : await setOption($, 'enabled', true);
-  if (outcome.deny !== undefined) {
-    return { text: `Not turned on: the setting was not saved (${outcome.deny}).` };
+  const problem = settings.isEnabled ? null : await setOption($, 'enabled', true);
+  if (problem !== null) {
+    return {
+      text: `Not turned on: the setting was not saved (${problem}).`,
+      exitCode: FAILED_EXIT,
+    };
   }
   return { text: `On. Jokes on ${describeRate(turnRate(settings))} (${settings.preset}).` };
 }
 
-async function setPreset(
-  $: EngineInterface,
-  settings: Settings,
-  preset: Preset,
-): Promise<{ text: string }> {
-  const outcome = await setOption($, 'preset', preset);
-  if (outcome.deny !== undefined) {
-    return { text: `The preset stays ${settings.preset}: ${outcome.deny}.` };
+async function setPreset($: EngineInterface, settings: Settings, preset: Preset): Promise<Answer> {
+  const problem = await setOption($, 'preset', preset);
+  if (problem !== null) {
+    return { text: `The preset stays ${settings.preset}: ${problem}.`, exitCode: FAILED_EXIT };
   }
   const rate = describeRate(turnRate({ ...settings, preset }));
   return { text: `Preset is now ${preset}: jokes on ${rate}.` };
@@ -439,11 +449,7 @@ async function statusText($: EngineInterface, settings: Settings): Promise<strin
   return `On · ${settings.preset} · jokes on ${describeRate(turnRate(settings))}.`;
 }
 
-async function answer(
-  $: EngineInterface,
-  settings: Settings,
-  args: string,
-): Promise<{ text: string }> {
+async function answer($: EngineInterface, settings: Settings, args: string): Promise<Answer> {
   const verb = args.trim().toLowerCase();
   if (verb === '' || verb === 'status') {
     return { text: await statusText($, settings) };
@@ -466,7 +472,7 @@ async function answerOwn(
   settings: Settings,
   command: string,
   args: string,
-): Promise<{ text: string } | null> {
+): Promise<Answer | null> {
   if (!owned.has(command)) {
     return null;
   }
@@ -477,6 +483,16 @@ const DESCRIPTION = 'p(oop)stack: on, off, discreet, regular, maximum, or status
 const FAILED =
   'The command failed inside p(oop)stack (the transcript names the error); /poopstack status shows where it stands.';
 const HINT = '[on|off|discreet|regular|maximum|status]';
+
+// The catch of each command hook: a failure inside the mod's own command says so, and fails a
+// headless run, instead of passing on; a name the mod does not hold passes on to its owner.
+function failedOrPass<E extends { readonly command: string }, R>(
+  _$: unknown,
+  e: E,
+  next: (e: E) => Promise<R>,
+): Promise<R | Answer> {
+  return owned.has(e.command) ? Promise.resolve({ text: FAILED, exitCode: FAILED_EXIT }) : next(e);
+}
 
 // Each visible name (decision 35) is registered by its literal name; a name another plugin or
 // Claude Code already holds is refused, and the mod then leaves that name to its owner.
@@ -597,21 +613,20 @@ export const register: Register = (on, options) => {
     return withLabel($, e, drawn, word, settings.preset);
   }).catch((_$, e, next) => next(e));
 
-  // One hook per visible name, each matched by its literal name; a name the mod does not hold
-  // passes on to its owner. A failure inside the mod's own command says so instead of passing on.
+  // One hook per visible name, each matched by its literal name (the catch: `failedOrPass`).
   on('command.run', { command: 'poopstack' }, async ($, e, next) => {
     return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(async (_$, e, next) => (owned.has(e.command) ? { text: FAILED } : next(e)));
+  }).catch(failedOrPass);
   on('command.run', { command: 'poop' }, async ($, e, next) => {
     return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(async (_$, e, next) => (owned.has(e.command) ? { text: FAILED } : next(e)));
+  }).catch(failedOrPass);
   on('command.run', { command: 'commode' }, async ($, e, next) => {
     return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(async (_$, e, next) => (owned.has(e.command) ? { text: FAILED } : next(e)));
+  }).catch(failedOrPass);
   on('command.run', { command: 'porcelain' }, async ($, e, next) => {
     return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(async (_$, e, next) => (owned.has(e.command) ? { text: FAILED } : next(e)));
+  }).catch(failedOrPass);
   on('command.run', { command: 'agentic-outhouse' }, async ($, e, next) => {
     return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(async (_$, e, next) => (owned.has(e.command) ? { text: FAILED } : next(e)));
+  }).catch(failedOrPass);
 };
