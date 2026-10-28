@@ -128,7 +128,7 @@ function run(command: string, args: string) {
 
 async function spinnerWord(
   $: Engine,
-  surface: 'terminal' | 'desktop',
+  surface: 'terminal' | 'desktop' | 'vscode',
   word: string,
   message: string | null,
 ) {
@@ -161,6 +161,8 @@ test('off the terminal only the bare "Working" is replaced', { options: ALWAYS }
   await start($);
   expect(await spinnerWord($, 'desktop', 'Creating notes.md', null)).toBe('Creating notes.md');
   expect(WORKING.has((await spinnerWord($, 'desktop', 'Working', null)) ?? '')).toBe(true);
+  expect(await spinnerWord($, 'vscode', 'Creating notes.md', null)).toBe('Creating notes.md');
+  expect(WORKING.has((await spinnerWord($, 'vscode', 'Working', null)) ?? '')).toBe(true);
 });
 
 test('a session that is not interactive is left alone', { options: ALWAYS }, async ($, on) => {
