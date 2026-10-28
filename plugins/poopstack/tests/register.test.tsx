@@ -32,6 +32,8 @@ const CLOSING = {
   component: 'TurnDuration',
   props: { word: 'Brewed', durationMs: 16_000 },
 } as const;
+// The rest of the line the stand-in draws after the word, from CLOSING's duration.
+const TAIL = ' for 16s · done 3:40 PM';
 
 // What every `turn.complete` in these tests carries besides its id and reason.
 const TURN_BASE = { answer: 'done', durationMs: 1_000, text: 'done' } as const;
@@ -126,8 +128,13 @@ function engine(
     return <Text>{e.props.word}</Text>;
   });
   on('ui.render', { component: 'TurnDuration' }, ($, e) => {
-    const { Text } = $.ui.resolve(e);
-    return <Text>{e.props.word}</Text>;
+    const { Box, Text } = $.ui.resolve(e);
+    return (
+      <Box>
+        <Text>{e.props.word}</Text>
+        <Text>{` for ${e.props.durationMs / 1000}s · done 3:40 PM`}</Text>
+      </Box>
+    );
   });
   return seen;
 }
@@ -309,10 +316,11 @@ test(
     engine(on);
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'answer');
-    const [word, label] = await closingTexts($, 'row-1');
+    const [word, tail, label] = await closingTexts($, 'row-1');
     expect(DONE.has(word ?? '')).toBe(true);
+    expect(tail).toBe(TAIL);
     expect(label).toBe(`${LABEL_GAP}${FOOTER_LABEL}`);
-    expect(await closingTexts($, 'row-unknown')).toEqual(['Brewed']);
+    expect(await closingTexts($, 'row-unknown')).toEqual(['Brewed', TAIL]);
   },
 );
 
@@ -323,7 +331,11 @@ test(
     engine(on);
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'answer');
-    expect((await closingTexts($, 'row-1'))[1]).toBe(`${LABEL_GAP}${FOOTER_LABEL_DISCREET}`);
+    expect(await closingTexts($, 'row-1')).toEqual([
+      expect.any(String),
+      TAIL,
+      `${LABEL_GAP}${FOOTER_LABEL_DISCREET}`,
+    ]);
   },
 );
 
@@ -331,8 +343,8 @@ test('the label is left off where it would wrap the line', { options: ALWAYS }, 
   engine(on);
   await start($);
   await turnWithRow($, 'turn-1', 'row-1', 'answer');
-  expect((await closingTexts($, 'row-1', 200)).length).toBe(2);
-  expect((await closingTexts($, 'row-1', 40)).length).toBe(1);
+  expect((await closingTexts($, 'row-1', 200)).length).toBe(3);
+  expect((await closingTexts($, 'row-1', 40)).length).toBe(2);
 });
 
 test(
@@ -349,7 +361,7 @@ test('a refused turn says only "Refused"', { options: ALWAYS }, async ($, on) =>
   engine(on);
   await start($);
   await turnWithRow($, 'turn-1', 'row-1', 'refusal');
-  expect(await closingTexts($, 'row-1')).toEqual([REFUSED_WORD]);
+  expect(await closingTexts($, 'row-1')).toEqual([REFUSED_WORD, TAIL]);
 });
 
 test('an error turn shows his error line', { options: ALWAYS }, async ($, on) => {
