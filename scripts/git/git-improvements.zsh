@@ -65,7 +65,8 @@ set -euo pipefail
 # cwd at a worktree top level, `git config --local` writes to the identical
 # file with GIT_DIR inherited and with GIT_DIR cleared (both landed in the
 # shared <repo>/.git/config). So this is a no-op in the designed venue and a
-# correction everywhere else. Enforced by scripts/lint/check-git-env-neutralisation.py.
+# correction everywhere else. No check in this repository enforces this line: its own test runs
+# the script under `env -i`, so no GIT_DIR is inherited there. Keep it by review.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 local script_path="scripts/git/git-improvements.zsh"

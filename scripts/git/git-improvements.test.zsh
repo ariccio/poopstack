@@ -126,8 +126,7 @@ if ! mkdir -p "${hermetic_home}" "${hermetic_xdg_config_home}" "${hermetic_tmpdi
   exit 1
 fi
 
-# hermetic_run: the ONE launcher, the same shape as the hermetic owner in
-# scripts/git/install-worktree-safe-lefthook.test.zsh. `env -i` discards the
+# hermetic_run: the ONE launcher. `env -i` discards the
 # whole inherited environment (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and
 # anything else a hook venue exports) rather than enumerating it, then names
 # the minimal set. The GIT_CONFIG_* entries detach git from the developer's
