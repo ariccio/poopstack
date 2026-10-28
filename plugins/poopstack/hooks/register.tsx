@@ -179,6 +179,13 @@ async function ensureOutcomeDice($: EngineInterface, settings: Settings): Promis
   await $.state.set(RNG, dice.state);
 }
 
+// A session's start, after the engine's: the off state, the dice, then the commit counts' pruning.
+async function setUpSession($: EngineInterface, settings: Settings): Promise<void> {
+  await reconcileOff($, settings);
+  await ensureReady($, settings);
+  await pruneCommitCounts($, settings);
+}
+
 // The session's generator, dice and bag, each set once. `session.start` sets them; a /clear goes on
 // under a new session id with no `session.start` (the types, at `session.end`), so each main turn's
 // start sets them too when they are missing; every commit and turn end comes after one. Once set,
@@ -291,6 +298,16 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
     $.ui.toast(COUNT_RESET);
   }
   $.ui.toast(commitLine(shown, settings.preset));
+}
+
+// The commit line's bookkeeping takes about eight engine calls, 30 to 50 ms on a joked commit
+// (timed once on 2026-10-28, a store write 18.5 ms), so it follows the tool's result instead of
+// holding it (Codex review finding 1). No hook awaits it, so a failure would reach no one: it is
+// logged as a dim transcript line naming the mod, never sent to the model.
+function afterTheCall($: EngineInterface, work: Promise<void>): void {
+  work.catch((error: unknown) => {
+    $.ui.log(`p(oop)stack: the commit line failed: ${String(error)}`);
+  });
 }
 
 // --- the interrupted turn ----------------------------------------------------------------------
@@ -617,11 +634,7 @@ export const register: Register = (on, options) => {
     await registerCommands($);
     const result = await next(e);
     isInteractive = e.isInteractive;
-    await serial(async () => {
-      await reconcileOff($, settings);
-      await ensureReady($, settings);
-      await pruneCommitCounts($, settings);
-    });
+    await serial(() => setUpSession($, settings));
     return result;
   }).catch((_$, e, next) => next(e));
 
@@ -664,11 +677,14 @@ export const register: Register = (on, options) => {
     return result;
   }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
 
-  // An observer: the call runs first and its result returns unchanged.
+  // An observer: the result returns unchanged, at once; the commit line follows (`afterTheCall`).
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e);
     if (result.deny === undefined && commitKind(result.result) !== null) {
-      await serial(() => commitJoke($, settings));
+      afterTheCall(
+        $,
+        serial(() => commitJoke($, settings)),
+      );
     }
     return result;
   }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run

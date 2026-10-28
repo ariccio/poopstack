@@ -1,4 +1,4 @@
-import { expect, type TestBody, test } from 'claude-code/testing';
+import { expect, type MockClock, mock, type TestBody, test } from 'claude-code/testing';
 import { COMMIT_COUNT_KEEP_MS } from '../hooks/commits';
 import {
   ABORTED_LINE,
@@ -38,11 +38,15 @@ const TAIL = ' for 16s · done 3:40 PM';
 // What every `turn.complete` in these tests carries besides its id and reason.
 const TURN_BASE = { answer: 'done', durationMs: 1_000, text: 'done' } as const;
 
+// What the stand-in saw, and its clock: work the mod leaves running (the commit line, which
+// follows a Bash call's result) has run once a test calls `clock.settle()`.
 type Seen = {
   toasts: string[];
   configSets: string[];
   storeSets: string[];
   storeDeletes: string[];
+  logs: string[];
+  clock: MockClock;
 };
 
 // The machine-wide store as a test starts it: by default the first-run toast was already seen.
@@ -80,7 +84,14 @@ function engine(
   stored: Readonly<Record<string, unknown>> = SEEN_BEFORE,
   config: StandIn = {},
 ): Seen {
-  const seen: Seen = { toasts: [], configSets: [], storeSets: [], storeDeletes: [] };
+  const seen: Seen = {
+    toasts: [],
+    configSets: [],
+    storeSets: [],
+    storeDeletes: [],
+    logs: [],
+    clock: mock.clock(on, { now: NOW }),
+  };
   const store = new Map<string, unknown>(Object.entries(stored));
   on('command.register', (_, e) => ({ value: { command: e.name } }));
   on('command.list', () => ({
@@ -108,7 +119,6 @@ function engine(
   });
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.id', () => ({ value: 'session-1' }));
-  on('clock.now', () => ({ value: NOW }));
   on('store.get', async (_, e) => {
     if (config.countReadGate !== undefined && e.key.startsWith('commitJokes.')) {
       config.countReadGate.entered();
@@ -136,6 +146,10 @@ function engine(
   on('turn.complete', (_, e) => ({ text: e.answer }));
   on('ui.toast', (_, e) => {
     seen.toasts.push(e.text);
+    return { value: undefined };
+  });
+  on('ui.log', (_, e) => {
+    seen.logs.push(e.text);
     return { value: undefined };
   });
   on('ui.render', { component: 'Spinner' }, ($, e) => {
@@ -467,6 +481,7 @@ test(
     await $.tool.call({ tool: 'Bash', command: CLAUDE_STYLE });
     await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
     await $.tool.call({ tool: 'Bash', command: 'git commit --amend --no-edit' });
+    await seen.clock.settle();
     expect(seen.toasts).toEqual([COMMIT_FIRST, COMMIT_SECOND, COMMIT_FIRST]);
   },
 );
@@ -486,6 +501,7 @@ test(
     await start($);
     await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
     await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: y"' });
+    await seen.clock.settle();
     expect(seen.toasts).toEqual([COMMIT_SECOND, COMMIT_FIRST]);
     expect(seen.storeSets).toEqual(['commitJokes.session-1', 'commitJokes.session-1']);
   },
@@ -516,6 +532,7 @@ test(
     on('tool.call', () => COMMITTED);
     await start($);
     await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await seen.clock.settle();
     expect(seen.storeSets).toEqual([]);
     expect(seen.storeDeletes).toEqual([]);
     expect(seen.toasts).toEqual([]);
@@ -530,6 +547,7 @@ test(
     on('tool.call', () => ({ ...NOTHING, isError: true, text: 'exit 1' }));
     await start($);
     const failed = await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await seen.clock.settle();
     expect(failed.isError).toBe(true);
     expect(failed.text).toBe('exit 1');
     expect(seen.toasts).toEqual([]);
@@ -672,6 +690,7 @@ test(
     expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
       COMMITTED,
     );
+    await seen.clock.settle();
     expect(calls).toBe(1);
     expect(seen.toasts).toEqual([]);
   },
@@ -742,8 +761,11 @@ test(
     expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
       COMMITTED,
     );
+    await seen.clock.settle();
     expect(calls).toBe(1);
     expect(seen.toasts).toEqual([]);
+    expect(seen.logs.length).toBe(1);
+    expect(seen.logs[0]?.startsWith('p(oop)stack: the commit line failed')).toBe(true);
   },
 );
 
@@ -834,6 +856,7 @@ test(
     on('tool.call', () => COMMITTED);
     await start($);
     await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await seen.clock.settle();
     expect(seen.toasts.length).toBe(2);
     expect(seen.toasts[0]?.startsWith(COUNT_RESET_START)).toBe(true);
     expect(seen.toasts[1]).toBe(COMMIT_FIRST);
@@ -855,6 +878,7 @@ test(
     await entered.promise;
     await $.command.run(run('poop', 'off'));
     released.open();
+    await seen.clock.settle();
     expect(await call).toEqual(COMMITTED);
     expect(seen.configSets).toEqual(['poopstack.enabled=false']);
     expect(seen.storeSets).toEqual([]);
@@ -873,6 +897,7 @@ test(
       $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' }),
       $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: y"' }),
     ]);
+    await seen.clock.settle();
     expect(seen.toasts).toEqual([COMMIT_FIRST, COMMIT_SECOND]);
   },
 );
@@ -901,5 +926,26 @@ test(
     await $.turn.complete(end('turn-b'));
     expect(await closingText($, 'row-a')).toBe('Brewed');
     expect(await closingText($, 'row-b')).toBe(DONE_OF.get(second) ?? '');
+  },
+);
+
+test(
+  "a commit's result comes back before its joke's bookkeeping finishes",
+  { options: ALWAYS },
+  async ($, on) => {
+    const entered = latch();
+    const released = latch();
+    const countReadGate = { entered: entered.open, released: released.promise };
+    const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { countReadGate });
+    on('tool.call', () => COMMITTED);
+    await start($);
+    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
+      COMMITTED,
+    );
+    await entered.promise;
+    expect(seen.toasts).toEqual([]);
+    released.open();
+    await seen.clock.settle();
+    expect(seen.toasts).toEqual([COMMIT_FIRST]);
   },
 );
