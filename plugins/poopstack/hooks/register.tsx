@@ -1,4 +1,11 @@
-import type { EngineInterface, Register, RenderPropsOf, RenderSurface } from 'claude-code';
+import type {
+  EngineInterface,
+  Register,
+  RenderPropsOf,
+  RenderSurface,
+  TurnCompleteInput,
+  TurnCompleteReason,
+} from 'claude-code';
 import { COMMIT_COUNT_PREFIX, commitCountKey, isStale, shownSoFar } from './commits';
 import { commitKind } from './git';
 import {
@@ -11,7 +18,7 @@ import {
   turnRate,
 } from './options';
 import { drawPhrase, hashId, nextRandom, prdConstant, roll, warmMisses } from './pick';
-import { ABORTED_LINE, commitLine, poolFor } from './vocabulary';
+import { ABORTED_LINE, commitLine, doneFor, ERROR_WORD, poolFor, REFUSED_WORD } from './vocabulary';
 
 // Wiring only: each hook reads what it needs from `$` and hands it to the pure modules. Every
 // hook passes the event on unchanged when the mod is off, the session is not interactive, or the
@@ -25,6 +32,7 @@ const BAG = { plugin: 'poopstack', key: 'bag' } as const;
 const TURN_MISSES = { plugin: 'poopstack', key: 'turnMisses' } as const;
 const COMMIT_MISSES = { plugin: 'poopstack', key: 'commitMisses' } as const;
 const OUTCOME_MISSES = { plugin: 'poopstack', key: 'outcomeMisses' } as const;
+const CLOSING_WORD = { plugin: 'poopstack', key: 'closingWord' } as const;
 
 // $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
 // typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
@@ -39,6 +47,18 @@ let isFirstRunChecked = false;
 let isTypedTurn = false;
 const owned = new Set<string>();
 const constants = new Map<number, number>();
+
+// The main turn whose closing line is being paired (feature row 2): the phrase its spinner was
+// given, and two facts that arrive in either order, the uuid of its `turn_duration` row (the
+// line's requestId, FINDINGS 1) and why it ended. A reload mid-turn loses it, and that line
+// then keeps Claude Code's own word.
+type Pairing = {
+  readonly turnId: string;
+  readonly phrase: string | null;
+  uuid: string | null;
+  reason: TurnCompleteReason | null;
+};
+let pairing: Pairing | null = null;
 
 function need<T>(value: T | undefined, name: string): T {
   if (value === undefined) {
@@ -149,9 +169,8 @@ async function spinnerPhrase(
   return isStillShown ? phrase : null;
 }
 
-// Until the closing line can be joined to its turn (feature row 2, waiting on his ruling), each
-// line's joke is derived from its own id: an independent past-tense joke at the turn rate, the
-// same on every redraw. A preset or rate change re-words the lines on screen.
+// The word a closing line was given when its turn was paired, or null for a line never paired
+// (a plain turn, or a line drawn before the mod loaded): that line keeps Claude Code's word.
 async function closingWord(
   $: EngineInterface,
   settings: Settings,
@@ -164,12 +183,7 @@ async function closingWord(
   if (props.waitingFor !== undefined || (await isOff($))) {
     return null;
   }
-  const hash = hashId(requestId);
-  if ((hash >>> 16) / 65536 >= turnRate(settings)) {
-    return null;
-  }
-  const pool = poolFor(settings.preset);
-  return pool[(hash & 0xffff) % pool.length]?.done ?? null;
+  return (await $.state.get({ ...CLOSING_WORD, id: requestId })).value ?? null;
 }
 
 // --- the commit line ---------------------------------------------------------------------------
@@ -195,14 +209,14 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
 
 // --- the interrupted turn ----------------------------------------------------------------------
 
-// An interrupted turn draws no closing line (FINDINGS 13), so his line is a toast, in regular and
-// maximum only, on the outcome dice; Claude Code's own interrupt row stays as it is.
-async function abortedJoke($: EngineInterface, settings: Settings): Promise<void> {
+// The outcome lines (interrupted, error) share one set of dice at the matched rate, in regular
+// and maximum only; false when the mod is off or the preset is discreet.
+async function rollOutcome($: EngineInterface, settings: Settings): Promise<boolean> {
   if (!(settings.isEnabled && isInteractive) || settings.preset === 'discreet') {
-    return;
+    return false;
   }
   if (await isOff($)) {
-    return;
+    return false;
   }
   const rng = need((await $.state.get(RNG)).value, 'rng');
   const misses = need((await $.state.get(OUTCOME_MISSES)).value, 'outcomeMisses');
@@ -210,8 +224,91 @@ async function abortedJoke($: EngineInterface, settings: Settings): Promise<void
   const result = roll(constantFor(matchedRate(settings)), misses, dice.value);
   await $.state.set(RNG, dice.state);
   await $.state.set(OUTCOME_MISSES, result.misses);
-  if (result.isHit) {
+  return result.isHit;
+}
+
+// An interrupted turn draws no closing line (FINDINGS 13), so his line is a toast; Claude Code's
+// own interrupt row stays as it is.
+async function abortedJoke($: EngineInterface, settings: Settings): Promise<void> {
+  if (await rollOutcome($, settings)) {
     $.ui.toast(ABORTED_LINE);
+  }
+}
+
+// --- the closing line, paired with its turn (feature row 2) ------------------------------------
+
+// What a paired line says. The past form of the turn's own phrase when it answered; "Refused"
+// in its place when it was refused; the error line on the outcome dice when an API error ended
+// it; nothing (Claude Code's word) after an interrupt, on a plain turn, or when the mod is off.
+async function pairedWord(
+  $: EngineInterface,
+  settings: Settings,
+  held: Pairing,
+  reason: TurnCompleteReason,
+): Promise<string | null> {
+  if (reason === 'error') {
+    return (await rollOutcome($, settings)) ? ERROR_WORD : null;
+  }
+  if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
+    return null;
+  }
+  const done = doneFor(held.phrase, settings.preset);
+  if (done === null || reason === 'aborted') {
+    return null;
+  }
+  return reason === 'refusal' ? REFUSED_WORD : done;
+}
+
+// Called when either fact arrives: the word is written once both are known. The line usually
+// draws after both (186 of 191 lines in the probe's logs); a line that drew first is redrawn by
+// the write, or, if the engine does not redraw it, keeps Claude Code's word.
+async function settleClosing($: EngineInterface, settings: Settings): Promise<void> {
+  const held = pairing;
+  if (held === null || held.uuid === null || held.reason === null) {
+    return;
+  }
+  pairing = null;
+  const word = await pairedWord($, settings, held, held.reason);
+  if (word !== null) {
+    await $.state.set({ ...CLOSING_WORD, id: held.uuid }, word);
+  }
+}
+
+async function startPairing($: EngineInterface, turnId: string): Promise<void> {
+  const phrase = (await $.state.get(PHRASE)).value ?? null;
+  pairing = { turnId, phrase, uuid: null, reason: null };
+}
+
+async function noteDurationRow(
+  $: EngineInterface,
+  settings: Settings,
+  uuid: string,
+): Promise<void> {
+  if (pairing !== null && pairing.uuid === null) {
+    pairing.uuid = uuid;
+    await settleClosing($, settings);
+  }
+}
+
+// The end of a main turn: the interrupted-turn toast, the closing line's pairing, the next
+// turn's phrase, and the first-run toast after a turn he typed.
+async function endMainTurn(
+  $: EngineInterface,
+  settings: Settings,
+  e: TurnCompleteInput,
+): Promise<void> {
+  const wasTyped = isTypedTurn;
+  isTypedTurn = false;
+  if (e.reason === 'aborted') {
+    await abortedJoke($, settings);
+  }
+  if (pairing !== null && pairing.turnId === e.turnId) {
+    pairing.reason = e.reason;
+    await settleClosing($, settings);
+  }
+  await drawTurn($, settings);
+  if (wasTyped) {
+    await firstRun($, settings);
   }
 }
 
@@ -401,18 +498,29 @@ export const register: Register = (on, options) => {
     return result;
   }).catch((_$, e, next) => next(e));
 
+  // An observer: notes the phrase a main turn starts with, for its closing line.
+  on('turn.start', async ($, e, next) => {
+    const result = await next(e);
+    if (e.agentId === undefined) {
+      await startPairing($, e.turnId);
+    }
+    return result;
+  }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+
+  // An observer: the main loop's `turn_duration` notice is the row its closing line draws for.
+  on('session.append', { door: 'notice' }, async ($, e, next) => {
+    const result = await next(e);
+    const isDuration = e.message.type === 'system' && e.message.name === 'turn_duration';
+    if (isDuration && e.agentId === undefined) {
+      await noteDurationRow($, settings, e.uuid);
+    }
+    return result;
+  }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
     if (e.agentId === undefined) {
-      const wasTyped = isTypedTurn;
-      isTypedTurn = false;
-      if (e.reason === 'aborted') {
-        await abortedJoke($, settings);
-      }
-      await drawTurn($, settings);
-      if (wasTyped) {
-        await firstRun($, settings);
-      }
+      await endMainTurn($, settings, e);
     }
     return result;
   }).catch((_$, e, next) => next(e));

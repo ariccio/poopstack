@@ -135,6 +135,12 @@ export const COMMIT_SECOND =
 // closing line to rewrite. Regular and maximum only; the real verb comes first (decision 31).
 export const ABORTED_LINE = "Aborted mid-movement: you didn't lock the door, they didn't knock!";
 
+// The closing line of a turn an API error ended (decision 31, his text): regular and maximum
+// only, on the outcome dice. A refused turn whose line would have joked says only "Refused"
+// (decision 24); a plain turn keeps Claude Code's own word either way.
+export const ERROR_WORD = 'Failed: oopsie doopsie, had a lil poopsie';
+export const REFUSED_WORD = 'Refused';
+
 const RANK: Readonly<Record<Preset, number>> = { discreet: 0, regular: 1, maximum: 2 };
 
 export function isShownAt(entry: Entry, preset: Preset): boolean {
@@ -143,6 +149,12 @@ export function isShownAt(entry: Entry, preset: Preset): boolean {
 
 export function poolFor(preset: Preset): readonly Entry[] {
   return ENTRIES.filter((entry) => isShownAt(entry, preset));
+}
+
+// The past form that pairs with a turn's phrase, or null when the turn was plain or the phrase
+// is not in the preset's pool (the spinner then showed Claude Code's own word).
+export function doneFor(phrase: string | null, preset: Preset): string | null {
+  return poolFor(preset).find((entry) => entry.working === phrase)?.done ?? null;
 }
 
 // `shown` counts the commit jokes this session showed before this one.

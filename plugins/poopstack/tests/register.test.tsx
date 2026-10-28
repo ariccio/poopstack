@@ -1,6 +1,13 @@
 import { expect, type TestBody, test } from 'claude-code/testing';
 import { COMMIT_COUNT_KEEP_MS } from '../hooks/commits';
-import { ABORTED_LINE, COMMIT_FIRST, COMMIT_SECOND, poolFor } from '../hooks/vocabulary';
+import {
+  ABORTED_LINE,
+  COMMIT_FIRST,
+  COMMIT_SECOND,
+  ERROR_WORD,
+  poolFor,
+  REFUSED_WORD,
+} from '../hooks/vocabulary';
 
 type Engine = Parameters<TestBody>[0];
 type On = Parameters<TestBody>[1];
@@ -22,6 +29,9 @@ const CLOSING = {
   component: 'TurnDuration',
   props: { word: 'Brewed', durationMs: 16_000 },
 } as const;
+
+// What every `turn.complete` in these tests carries besides its id and reason.
+const TURN_BASE = { answer: 'done', durationMs: 1_000, text: 'done' } as const;
 
 type Seen = {
   toasts: string[];
@@ -79,6 +89,9 @@ function engine(
     return { value: undefined };
   });
   on('store.keys', () => ({ value: [...store.keys()] }));
+  on('turn.start', (_, e) => ({ turnId: e.turnId }));
+  on('session.append', (_, e, next) => next(e));
+  on('turn.complete', (_, e) => ({ text: e.answer }));
   on('ui.toast', (_, e) => {
     seen.toasts.push(e.text);
     return { value: undefined };
@@ -190,19 +203,112 @@ test('a name another plugin holds is left to that plugin', { options: ALWAYS }, 
   expect(result.text).toBe('answered by the other plugin');
 });
 
+// The past form paired with each working phrase in the regular pool.
+const DONE_OF = new Map(poolFor('regular').map((entry) => [entry.working, entry.done]));
+
+type Reason = 'answer' | 'aborted' | 'refusal' | 'error';
+
+// One main turn as the engine reports it: its start, the `turn_duration` row its closing line
+// draws for, and its end, with the row before or after the end (both orders occur: FINDINGS 1).
+async function turnWithRow(
+  $: Engine,
+  turnId: string,
+  uuid: string,
+  reason: Reason,
+  isRowFirst = true,
+): Promise<void> {
+  const row = {
+    message: { type: 'system', name: 'turn_duration', content: [] },
+    door: 'notice',
+    origin: { kind: 'unclassified' },
+    uuid,
+  } as const;
+  const end = { ...TURN_BASE, turnId, isAborted: reason === 'aborted' } as const;
+  await $.turn.start({ text: 'go', turnId });
+  if (isRowFirst) {
+    await $.session.append(row);
+  }
+  await (reason === 'refusal'
+    ? $.turn.complete({ ...end, reason, refusal: { category: null, explanation: null } })
+    : $.turn.complete({ ...end, reason }));
+  if (!isRowFirst) {
+    await $.session.append(row);
+  }
+}
+
+async function closingText($: Engine, requestId: string, extra: object = {}): Promise<string> {
+  const props = { ...CLOSING.props, ...extra };
+  const ui = await $.ui.mount({ ...CLOSING, surface: 'terminal', requestId, props });
+  const text = (await ui.find({ type: 'Text' }))?.text ?? '';
+  await ui.unmount();
+  return text;
+}
+
 test(
-  'a closing line gets a past form, and keeps it on every redraw',
+  "a closing line shows the past form of its own turn's phrase, whichever fact comes first",
   { options: ALWAYS },
   async ($, on) => {
     engine(on);
     await start($);
+    const first = (await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '';
+    await turnWithRow($, 'turn-1', 'row-1', 'answer');
+    const second = (await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '';
+    await turnWithRow($, 'turn-2', 'row-2', 'answer', false);
     const ui = await $.ui.mount({ ...CLOSING, surface: 'terminal', requestId: 'row-1' });
-    const first = (await ui.find({ type: 'Text' }))?.text ?? '';
+    const shown = (await ui.find({ type: 'Text' }))?.text;
     await ui.redraw();
-    const again = (await ui.find({ type: 'Text' }))?.text ?? '';
+    const again = (await ui.find({ type: 'Text' }))?.text;
     await ui.unmount();
-    expect(DONE.has(first)).toBe(true);
-    expect(again).toBe(first);
+    expect(DONE.has(shown ?? '')).toBe(true);
+    expect(shown).toBe(DONE_OF.get(first));
+    expect(again).toBe(shown);
+    expect(await closingText($, 'row-2')).toBe(DONE_OF.get(second) ?? '');
+  },
+);
+
+test(
+  "a line never paired (drawn before the mod loaded) keeps the engine's word",
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    expect(await closingText($, 'row-unknown')).toBe('Brewed');
+  },
+);
+
+test('a refused turn says only "Refused"', { options: ALWAYS }, async ($, on) => {
+  engine(on);
+  await start($);
+  await turnWithRow($, 'turn-1', 'row-1', 'refusal');
+  expect(await closingText($, 'row-1')).toBe(REFUSED_WORD);
+});
+
+test('an error turn shows his error line', { options: ALWAYS }, async ($, on) => {
+  engine(on);
+  await start($);
+  await turnWithRow($, 'turn-1', 'row-1', 'error');
+  expect(await closingText($, 'row-1')).toBe(ERROR_WORD);
+});
+
+test(
+  "discreet keeps the engine's word on an error turn",
+  { options: { ...ALWAYS, preset: 'discreet' } },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    await turnWithRow($, 'turn-1', 'row-1', 'error');
+    expect(await closingText($, 'row-1')).toBe('Brewed');
+  },
+);
+
+test(
+  "an interrupted turn's line, if one draws, keeps the engine's word",
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    await turnWithRow($, 'turn-1', 'row-1', 'aborted');
+    expect(await closingText($, 'row-1')).toBe('Brewed');
   },
 );
 
@@ -212,14 +318,23 @@ test(
   async ($, on) => {
     engine(on);
     await start($);
-    const expanded = { ...CLOSING.props, isExpanded: true };
-    const waiting = { ...CLOSING.props, waitingFor: { agents: [], workflows: 0 } };
-    const one = await $.ui.mount({ ...CLOSING, surface: 'terminal', props: expanded });
-    expect((await one.find({ type: 'Text' }))?.text).toBe('Brewed');
-    await one.unmount();
-    const two = await $.ui.mount({ ...CLOSING, surface: 'terminal', props: waiting });
-    expect((await two.find({ type: 'Text' }))?.text).toBe('Brewed');
-    await two.unmount();
+    await turnWithRow($, 'turn-1', 'row-1', 'answer');
+    expect(await closingText($, 'row-1', { isExpanded: true })).toBe('Brewed');
+    const waiting = { waitingFor: { agents: [], workflows: 0 } };
+    expect(await closingText($, 'row-1', waiting)).toBe('Brewed');
+    expect(DONE.has(await closingText($, 'row-1'))).toBe(true);
+  },
+);
+
+test(
+  "/poop off turns a paired line back to the engine's word",
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    await turnWithRow($, 'turn-1', 'row-1', 'answer');
+    await $.command.run(run('poop', 'off'));
+    expect(await closingText($, 'row-1')).toBe('Brewed');
   },
 );
 
@@ -341,7 +456,6 @@ test(
     // Nothing stored yet on this machine.
     const seen = engine(on, () => 'poopstack', {});
     on('prompt.submit', (_, e) => ({ text: e.text }));
-    on('turn.complete', (_, e) => ({ text: e.text }));
     await start($);
     await $.prompt.submit({
       text: 'cache nudge: reply one line, no work',
@@ -368,7 +482,6 @@ test(
   { options: ALWAYS },
   async ($, on) => {
     const seen = engine(on);
-    on('turn.complete', (_, e) => ({ text: e.text }));
     await start($);
     await $.turn.complete(ABORTED);
     await $.turn.complete(TURN);
@@ -381,7 +494,6 @@ test(
   { options: { ...ALWAYS, preset: 'discreet' } },
   async ($, on) => {
     const seen = engine(on);
-    on('turn.complete', (_, e) => ({ text: e.text }));
     await start($);
     await $.turn.complete(ABORTED);
     expect(seen.toasts).toEqual([]);
@@ -390,7 +502,6 @@ test(
 
 test("a subagent's interrupted turn shows no aborted line", { options: ALWAYS }, async ($, on) => {
   const seen = engine(on);
-  on('turn.complete', (_, e) => ({ text: e.text }));
   await start($);
   await $.turn.complete({ ...ABORTED, agentId: 'agent-1' });
   expect(seen.toasts).toEqual([]);

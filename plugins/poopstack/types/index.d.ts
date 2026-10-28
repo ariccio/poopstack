@@ -10,7 +10,9 @@
 // phrase: the base phrase of the running or next main turn; null when that turn is plain.
 // bag: the phrases still to come before the vocabulary repeats.
 // turnMisses, commitMisses, outcomeMisses: rolls since each channel's dice last hit (outcome:
-//   the line for an interrupted turn).
+//   the line for an interrupted turn, and the error line).
+// closingWord: one per closing line, keyed by its `turn_duration` row's uuid (the line's
+//   requestId): the word that line shows; unset leaves Claude Code's own word.
 
 export type TurnPhrase = string | null;
 
@@ -25,6 +27,7 @@ declare module 'claude-code' {
       turnMisses: number;
       commitMisses: number;
       outcomeMisses: number;
+      closingWord: StateFamily<string>;
     };
   }
 }
