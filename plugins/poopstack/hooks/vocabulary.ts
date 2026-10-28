@@ -141,6 +141,35 @@ export const ABORTED_LINE = "Aborted mid-movement: you didn't lock the door, the
 export const ERROR_WORD = 'Failed: oopsie doopsie, had a lil poopsie';
 export const REFUSED_WORD = 'Refused';
 
+// The label a joked closing line carries after Claude Code's own text (feature row 8), so a
+// reader can tell the word came from the mod. Discreet shows it without the emoji (design item
+// 11); a "Refused" line carries nothing after it (decision 24). Each label's length in UTF-16
+// units equals its width in columns: the emoji is two of each.
+export const FOOTER_LABEL = '🚽 p(oop)stack';
+export const FOOTER_LABEL_DISCREET = 'p(oop)stack';
+export const LABEL_GAP = ' · ';
+
+// The columns a closing line takes besides its word: "✻ " before it, and " for 1h 2m 3s · done
+// 12:59 PM" after it (the engine's format, FINDINGS 22). An estimate from that format, not
+// measured on a narrow terminal; the live matrix measures it.
+export const LINE_TAIL_COLUMNS = 31;
+
+export function footerLabel(word: string, preset: Preset): string | null {
+  if (word === REFUSED_WORD) {
+    return null;
+  }
+  return preset === 'discreet' ? FOOTER_LABEL_DISCREET : FOOTER_LABEL;
+}
+
+// Whether the label fits after the line without wrapping it; true where the surface has not
+// measured its width, since a wrap there only costs a row.
+export function labelFits(columns: number | undefined, word: string, label: string): boolean {
+  if (columns === undefined) {
+    return true;
+  }
+  return word.length + LINE_TAIL_COLUMNS + LABEL_GAP.length + label.length <= columns;
+}
+
 const RANK: Readonly<Record<Preset, number>> = { discreet: 0, regular: 1, maximum: 2 };
 
 export function isShownAt(entry: Entry, preset: Preset): boolean {

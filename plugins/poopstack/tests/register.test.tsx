@@ -5,6 +5,9 @@ import {
   COMMIT_FIRST,
   COMMIT_SECOND,
   ERROR_WORD,
+  FOOTER_LABEL,
+  FOOTER_LABEL_DISCREET,
+  LABEL_GAP,
   poolFor,
   REFUSED_WORD,
 } from '../hooks/vocabulary';
@@ -266,6 +269,48 @@ test(
   },
 );
 
+// Every text a closing line draws, in order: the word, then the label when there is one.
+async function closingTexts($: Engine, requestId: string, columns?: number): Promise<string[]> {
+  const viewport = columns === undefined ? {} : { viewport: { columns, rows: 24 } };
+  const ui = await $.ui.mount({ ...CLOSING, surface: 'terminal', requestId, ...viewport });
+  const texts = (await ui.findAll({ type: 'Text' })).map((found) => found.text);
+  await ui.unmount();
+  return texts;
+}
+
+test(
+  "a joked closing line carries the label after the engine's own text",
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    await turnWithRow($, 'turn-1', 'row-1', 'answer');
+    const [word, label] = await closingTexts($, 'row-1');
+    expect(DONE.has(word ?? '')).toBe(true);
+    expect(label).toBe(`${LABEL_GAP}${FOOTER_LABEL}`);
+    expect(await closingTexts($, 'row-unknown')).toEqual(['Brewed']);
+  },
+);
+
+test(
+  'discreet labels a joked line without the emoji',
+  { options: { ...ALWAYS, preset: 'discreet' } },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    await turnWithRow($, 'turn-1', 'row-1', 'answer');
+    expect((await closingTexts($, 'row-1'))[1]).toBe(`${LABEL_GAP}${FOOTER_LABEL_DISCREET}`);
+  },
+);
+
+test('the label is left off where it would wrap the line', { options: ALWAYS }, async ($, on) => {
+  engine(on);
+  await start($);
+  await turnWithRow($, 'turn-1', 'row-1', 'answer');
+  expect((await closingTexts($, 'row-1', 200)).length).toBe(2);
+  expect((await closingTexts($, 'row-1', 40)).length).toBe(1);
+});
+
 test(
   "a line never paired (drawn before the mod loaded) keeps the engine's word",
   { options: ALWAYS },
@@ -280,7 +325,7 @@ test('a refused turn says only "Refused"', { options: ALWAYS }, async ($, on) =>
   engine(on);
   await start($);
   await turnWithRow($, 'turn-1', 'row-1', 'refusal');
-  expect(await closingText($, 'row-1')).toBe(REFUSED_WORD);
+  expect(await closingTexts($, 'row-1')).toEqual([REFUSED_WORD]);
 });
 
 test('an error turn shows his error line', { options: ALWAYS }, async ($, on) => {

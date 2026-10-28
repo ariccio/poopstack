@@ -1,6 +1,8 @@
 import type {
   EngineInterface,
   Register,
+  RenderElement,
+  RenderInput,
   RenderPropsOf,
   RenderSurface,
   TurnCompleteInput,
@@ -23,7 +25,10 @@ import {
   commitLine,
   doneFor,
   ERROR_WORD,
+  footerLabel,
   isShownNow,
+  LABEL_GAP,
+  labelFits,
   poolFor,
   REFUSED_WORD,
 } from './vocabulary';
@@ -194,6 +199,28 @@ async function closingWord(
   }
   const word = (await $.state.get({ ...CLOSING_WORD, id: requestId })).value;
   return word !== undefined && isShownNow(word, settings.preset) ? word : null;
+}
+
+// Claude Code's own closing line, as drawn with the paired word, and the label after it (feature
+// row 8) unless the line refuses one or the measured width would wrap it.
+function withLabel(
+  $: EngineInterface,
+  e: RenderInput<'TurnDuration'>,
+  drawn: RenderElement,
+  word: string,
+  preset: Preset,
+): RenderElement {
+  const label = footerLabel(word, preset);
+  if (label === null || !labelFits(e.viewport?.columns, word, label)) {
+    return drawn;
+  }
+  const { Box, Text } = $.ui.resolve(e);
+  return (
+    <Box>
+      {drawn}
+      <Text dimColor>{`${LABEL_GAP}${label}`}</Text>
+    </Box>
+  );
 }
 
 // --- the commit line ---------------------------------------------------------------------------
@@ -558,9 +585,16 @@ export const register: Register = (on, options) => {
     return phrase === null ? next(e) : next({ ...e, props: { ...e.props, word: phrase } });
   }).catch((_$, e, next) => next(e));
 
+  // A joked line keeps Claude Code's own text (its true duration and time) with the label after
+  // it, left off where the measured width would wrap. The engine raises TurnDuration on the
+  // terminal only (its types), so design item 10 needs no surface check here.
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
     const word = await closingWord($, settings, e.requestId, e.props);
-    return word === null ? next(e) : next({ ...e, props: { ...e.props, word } });
+    if (word === null) {
+      return next(e);
+    }
+    const drawn = await next({ ...e, props: { ...e.props, word } });
+    return withLabel($, e, drawn, word, settings.preset);
   }).catch((_$, e, next) => next(e));
 
   // One hook per visible name, each matched by its literal name; a name the mod does not hold

@@ -5,7 +5,13 @@ import {
   commitLine,
   ENTRIES,
   ERROR_WORD,
+  FOOTER_LABEL,
+  FOOTER_LABEL_DISCREET,
+  footerLabel,
   isShownNow,
+  LABEL_GAP,
+  LINE_TAIL_COLUMNS,
+  labelFits,
   poolFor,
   REFUSED_WORD,
 } from '../hooks/vocabulary';
@@ -131,4 +137,21 @@ test('a closing word shows only where its preset would have joked it', () => {
     expect(isShownNow(ERROR_WORD, preset)).toBe(preset !== 'discreet');
     expect(isShownNow('A word no entry has', preset)).toBe(false);
   }
+});
+
+test('the closing label: nothing after "Refused", no emoji in discreet', () => {
+  const word = poolFor('discreet')[0]?.done ?? '';
+  expect(footerLabel(REFUSED_WORD, 'regular')).toBe(null);
+  expect(footerLabel(word, 'regular')).toBe(FOOTER_LABEL);
+  expect(footerLabel(ERROR_WORD, 'maximum')).toBe(FOOTER_LABEL);
+  expect(footerLabel(word, 'discreet')).toBe(FOOTER_LABEL_DISCREET);
+  expect(/^[\x20-\x7e]+$/.test(FOOTER_LABEL_DISCREET)).toBe(true);
+});
+
+test('the closing label is drawn only where the line still fits', () => {
+  const word = 'Took a bio break';
+  const width = word.length + LINE_TAIL_COLUMNS + LABEL_GAP.length + FOOTER_LABEL.length;
+  expect(labelFits(width, word, FOOTER_LABEL)).toBe(true);
+  expect(labelFits(width - 1, word, FOOTER_LABEL)).toBe(false);
+  expect(labelFits(undefined, word, FOOTER_LABEL)).toBe(true);
 });
