@@ -551,3 +551,126 @@ test("a subagent's interrupted turn shows no aborted line", { options: ALWAYS },
   await $.turn.complete({ ...ABORTED, agentId: 'agent-1' });
   expect(seen.toasts).toEqual([]);
 });
+
+// The pass-through chain (Codex's review, 2026-10-20): each observer at a gating event hands the
+// engine the input it was given, exactly once, and returns the engine's answer unchanged. In the
+// kit a stand-in that throws is skipped and nothing beneath it answers, so the call rejects; the
+// throw tests check that the mod ran it once and handed the rejection on.
+const INTERRUPTED = { result: { stdout: '', stderr: '', interrupted: true } } as const;
+const BACKGROUNDED = {
+  result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'task-1' },
+} as const;
+const DENIED = { deny: 'not in this folder' } as const;
+
+test(
+  'a Bash call reaches the engine once, unchanged, and its answer comes back unchanged',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    const answers = [COMMITTED, DENIED, INTERRUPTED, BACKGROUNDED, NOTHING] as const;
+    const sent = answers.map((_, index) => `git commit -m "feat: ${index}"`);
+    const received: string[] = [];
+    // The stand-in answers each call by the number in its command, so the calls may overlap.
+    on('tool.call', (_, e) => {
+      const command = e.tool === 'Bash' ? e.command : e.tool;
+      received.push(command);
+      return answers[sent.indexOf(command)] ?? NOTHING;
+    });
+    await start($);
+    const returned = await Promise.all(
+      sent.map((command) => $.tool.call({ tool: 'Bash', command })),
+    );
+    expect(returned).toEqual([...answers]);
+    expect([...received].sort()).toEqual(sent);
+  },
+);
+
+test(
+  'a Bash call the engine fails on is not run again, and the failure still shows',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on);
+    let calls = 0;
+    on('tool.call', () => {
+      calls += 1;
+      throw new Error('the engine failed');
+    });
+    await start($);
+    const outcome = await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' }).then(
+      () => 'resolved',
+      (error: unknown) => String(error),
+    );
+    expect(calls).toBe(1);
+    expect(outcome.startsWith('HooksError')).toBe(true);
+    expect(seen.toasts).toEqual([]);
+  },
+);
+
+test(
+  'turned off mid-session, a commit reaches the engine once and its answer comes back unchanged',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on);
+    let calls = 0;
+    on('tool.call', () => {
+      calls += 1;
+      return COMMITTED;
+    });
+    await start($);
+    await $.command.run(run('poop', 'off'));
+    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
+      COMMITTED,
+    );
+    expect(calls).toBe(1);
+    expect(seen.toasts).toEqual([]);
+  },
+);
+
+test(
+  'a prompt reaches the engine once, unchanged, and its answer comes back unchanged',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    const prompts: string[] = [];
+    on('prompt.submit', (_, e) => {
+      prompts.push(`${e.origin.kind}: ${e.text}`);
+      return e.text === 'drop me' ? { drop: 'dropped by the engine' } : { text: e.text };
+    });
+    await start($);
+    const typed = await $.prompt.submit({
+      text: 'hello',
+      origin: { kind: 'composer' },
+      wait: false,
+    });
+    const dropped = await $.prompt.submit({
+      text: 'drop me',
+      origin: { kind: 'scheduled-trigger' },
+      wait: false,
+    });
+    expect(typed).toEqual({ text: 'hello' });
+    expect(dropped).toEqual({ drop: 'dropped by the engine' });
+    expect(prompts).toEqual(['composer: hello', 'scheduled-trigger: drop me']);
+  },
+);
+
+test(
+  'a prompt the engine fails on is not sent again, and the failure still shows',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    let calls = 0;
+    on('prompt.submit', () => {
+      calls += 1;
+      throw new Error('the engine failed');
+    });
+    await start($);
+    const outcome = await $.prompt
+      .submit({ text: 'hello', origin: { kind: 'composer' }, wait: false })
+      .then(
+        () => 'resolved',
+        (error: unknown) => String(error),
+      );
+    expect(calls).toBe(1);
+    expect(outcome.startsWith('HooksError')).toBe(true);
+  },
+);
