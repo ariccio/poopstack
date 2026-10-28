@@ -150,6 +150,15 @@ async function ensureOutcomeDice($: EngineInterface, settings: Settings): Promis
   await $.state.set(RNG, dice.state);
 }
 
+// The session's generator, dice and bag, each set once. `session.start` sets them; a /clear goes on
+// under a new session id with no `session.start` (the types, at `session.end`), so each main turn's
+// start sets them too when they are missing; every commit and turn end comes after one. Once set,
+// nothing changes.
+async function ensureReady($: EngineInterface, settings: Settings): Promise<void> {
+  await ensureSession($, settings);
+  await ensureOutcomeDice($, settings);
+}
+
 // A /config change reloads the module; one that turns `enabled` back on clears a session's off.
 async function reconcileOff($: EngineInterface, settings: Settings): Promise<void> {
   const wasEnabled = (await $.state.get(WAS_ENABLED)).value;
@@ -545,8 +554,7 @@ export const register: Register = (on, options) => {
     const result = await next(e);
     isInteractive = e.isInteractive;
     await reconcileOff($, settings);
-    await ensureSession($, settings);
-    await ensureOutcomeDice($, settings);
+    await ensureReady($, settings);
     await pruneCommitCounts($, settings);
     return result;
   }).catch((_$, e, next) => next(e));
@@ -555,6 +563,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     const result = await next(e);
     if (e.agentId === undefined) {
+      await ensureReady($, settings);
       await startPairing($, e.turnId);
     }
     return result;

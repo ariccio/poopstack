@@ -749,3 +749,21 @@ test(
     expect(result.exitCode).toBe(1);
   },
 );
+
+test(
+  'a session that began with no session.start, as after /clear, sets its dice at its first turn',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    const writes: string[] = [];
+    on('state.set', (_, e, next) => {
+      writes.push(e.key);
+      return next(e);
+    });
+    await $.turn.start({ text: 'go', turnId: 'turn-1' });
+    expect(writes.includes('rng') && writes.includes('outcomeMisses')).toBe(true);
+    writes.length = 0;
+    await $.turn.complete(TURN);
+    expect(writes.includes('phrase')).toBe(true);
+  },
+);
