@@ -1,5 +1,14 @@
 import { expect, test } from 'claude-code/testing';
-import { COMMIT_FIRST, COMMIT_SECOND, commitLine, ENTRIES, poolFor } from '../hooks/vocabulary';
+import {
+  COMMIT_FIRST,
+  COMMIT_SECOND,
+  commitLine,
+  ENTRIES,
+  ERROR_WORD,
+  isShownNow,
+  poolFor,
+  REFUSED_WORD,
+} from '../hooks/vocabulary';
 
 // The meaning review's mechanical half (design contract, item 7). The column caps are guesses
 // until the narrow-terminal check in the live matrix: the spinner adds "… (12s · thinking with
@@ -109,4 +118,17 @@ test('his commit lines come in his order, and discreet keeps to the first', () =
   expect(COMMIT_SECOND).toBe(
     "don't worry, it's perfectly normal to have to go multiple times per day",
   );
+});
+
+test('a closing word shows only where its preset would have joked it', () => {
+  const tamest = ENTRIES.find((entry) => entry.tier === 'discreet');
+  const wildest = ENTRIES.find((entry) => entry.tier === 'maximum');
+  expect(tamest !== undefined && wildest !== undefined).toBe(true);
+  for (const preset of ['discreet', 'regular', 'maximum'] as const) {
+    expect(isShownNow(tamest?.done ?? '', preset)).toBe(true);
+    expect(isShownNow(wildest?.done ?? '', preset)).toBe(preset === 'maximum');
+    expect(isShownNow(REFUSED_WORD, preset)).toBe(true);
+    expect(isShownNow(ERROR_WORD, preset)).toBe(preset !== 'discreet');
+    expect(isShownNow('A word no entry has', preset)).toBe(false);
+  }
 });

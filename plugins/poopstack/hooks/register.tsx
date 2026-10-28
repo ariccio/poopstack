@@ -18,7 +18,15 @@ import {
   turnRate,
 } from './options';
 import { drawPhrase, hashId, nextRandom, prdConstant, roll, warmMisses } from './pick';
-import { ABORTED_LINE, commitLine, doneFor, ERROR_WORD, poolFor, REFUSED_WORD } from './vocabulary';
+import {
+  ABORTED_LINE,
+  commitLine,
+  doneFor,
+  ERROR_WORD,
+  isShownNow,
+  poolFor,
+  REFUSED_WORD,
+} from './vocabulary';
 
 // Wiring only: each hook reads what it needs from `$` and hands it to the pure modules. Every
 // hook passes the event on unchanged when the mod is off, the session is not interactive, or the
@@ -169,8 +177,9 @@ async function spinnerPhrase(
   return isStillShown ? phrase : null;
 }
 
-// The word a closing line was given when its turn was paired, or null for a line never paired
-// (a plain turn, or a line drawn before the mod loaded): that line keeps Claude Code's word.
+// The word a closing line was given when its turn was paired, if the preset in force now may
+// show it; null for a line never paired (a plain turn, or a line drawn before the mod loaded)
+// and for a word a tamer preset would not show: that line keeps Claude Code's word.
 async function closingWord(
   $: EngineInterface,
   settings: Settings,
@@ -183,7 +192,8 @@ async function closingWord(
   if (props.waitingFor !== undefined || (await isOff($))) {
     return null;
   }
-  return (await $.state.get({ ...CLOSING_WORD, id: requestId })).value ?? null;
+  const word = (await $.state.get({ ...CLOSING_WORD, id: requestId })).value;
+  return word !== undefined && isShownNow(word, settings.preset) ? word : null;
 }
 
 // --- the commit line ---------------------------------------------------------------------------

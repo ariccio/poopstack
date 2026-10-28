@@ -157,6 +157,18 @@ export function doneFor(phrase: string | null, preset: Preset): string | null {
   return poolFor(preset).find((entry) => entry.working === phrase)?.done ?? null;
 }
 
+// Whether a closing line's stored word may show under the preset in force now: a switch to a
+// tamer preset returns the lines on screen that it would not have joked to Claude Code's word.
+export function isShownNow(word: string, preset: Preset): boolean {
+  if (word === REFUSED_WORD) {
+    return true;
+  }
+  if (word === ERROR_WORD) {
+    return preset !== 'discreet';
+  }
+  return poolFor(preset).some((entry) => entry.done === word);
+}
+
 // `shown` counts the commit jokes this session showed before this one.
 export function commitLine(shown: number, preset: Preset): string {
   return shown === 1 && preset !== 'discreet' ? COMMIT_SECOND : COMMIT_FIRST;
