@@ -26,7 +26,8 @@ puns, without ever hiding what Claude is really doing. The design contract is
   defaults; every hook passes the unexpected through).
 - The model never sees a joke: no `prompt.compose`, no prompt context, no attribution text.
 - Off means off at once: `/poopstack off` stops every rewrite, timer, sound and store write.
-- Store only ids and counts, never prompts, paths, commands or output.
+- Store only a flag, session ids, counts and the time of their last write (`docs/design.md`,
+  item 7); never prompts, paths, commands or output.
 - Never loosen a gate quietly: a threshold, a rule, a test or a suppression that gets weaker is
   said aloud with its reason.
 - Prove a new gate fails once (plant a violation, watch it fail, revert) before trusting green,
