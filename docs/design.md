@@ -31,7 +31,7 @@ A Claude Code mod that replaces the whimsical spinner words and the turn-closing
 
 ## Vocabulary rules
 
-- **Outcome lines start with the real verb:** "Aborted mid-movement"; "Failed: oopsie doopsie, had a lil poopsie" (discreet keeps Claude Code's own line); "Refused" with nothing after it.
+- **Outcome lines start with the real verb:** "Aborted mid-movement: you didn't lock the door, they didn't knock!" as a toast (an interrupted turn draws no closing line; regular and maximum only); "Failed: oopsie doopsie, had a lil poopsie" (discreet keeps Claude Code's own line); "Refused" with nothing after it.
 - **Grammar:** every closing line is a durative past form that reads right before "for 42s".
 - **Meaning:** a real event makes both readings true, and no line can be mistaken for a real failure.
 - **Never:** a line shaped like a shell command; a line naming a real destructive operation; a copy of a real Claude Code status string (Retrying, Overloaded, Compacting, "blocked by hook"); the words "sphincter", "excretion", "core dump", "backup", "force"; "brown" in discreet.

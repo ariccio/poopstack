@@ -1,6 +1,6 @@
 import { expect, type TestBody, test } from 'claude-code/testing';
 import { COMMIT_COUNT_KEEP_MS } from '../hooks/commits';
-import { COMMIT_FIRST, COMMIT_SECOND, poolFor } from '../hooks/vocabulary';
+import { ABORTED_LINE, COMMIT_FIRST, COMMIT_SECOND, poolFor } from '../hooks/vocabulary';
 
 type Engine = Parameters<TestBody>[0];
 type On = Parameters<TestBody>[1];
@@ -360,3 +360,38 @@ test(
     expect(seen.storeDeletes).toEqual(['firstRunShown']);
   },
 );
+
+const ABORTED = { ...TURN, answer: '', text: '', isAborted: true, reason: 'aborted' } as const;
+
+test(
+  'an interrupted main turn shows his aborted line as a toast',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on);
+    on('turn.complete', (_, e) => ({ text: e.text }));
+    await start($);
+    await $.turn.complete(ABORTED);
+    await $.turn.complete(TURN);
+    expect(seen.toasts).toEqual([ABORTED_LINE]);
+  },
+);
+
+test(
+  'discreet shows no aborted line',
+  { options: { ...ALWAYS, preset: 'discreet' } },
+  async ($, on) => {
+    const seen = engine(on);
+    on('turn.complete', (_, e) => ({ text: e.text }));
+    await start($);
+    await $.turn.complete(ABORTED);
+    expect(seen.toasts).toEqual([]);
+  },
+);
+
+test("a subagent's interrupted turn shows no aborted line", { options: ALWAYS }, async ($, on) => {
+  const seen = engine(on);
+  on('turn.complete', (_, e) => ({ text: e.text }));
+  await start($);
+  await $.turn.complete({ ...ABORTED, agentId: 'agent-1' });
+  expect(seen.toasts).toEqual([]);
+});

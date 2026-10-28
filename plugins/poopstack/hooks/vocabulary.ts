@@ -131,6 +131,10 @@ export const COMMIT_FIRST = 'Making a deposit (not the money kind)';
 export const COMMIT_SECOND =
   "don't worry, it's perfectly normal to have to go multiple times per day";
 
+// His line for a turn he interrupted (decision 47), shown as a toast: an interrupted turn draws no
+// closing line to rewrite. Regular and maximum only; the real verb comes first (decision 31).
+export const ABORTED_LINE = "Aborted mid-movement: you didn't lock the door, they didn't knock!";
+
 const RANK: Readonly<Record<Preset, number>> = { discreet: 0, regular: 1, maximum: 2 };
 
 export function isShownAt(entry: Entry, preset: Preset): boolean {

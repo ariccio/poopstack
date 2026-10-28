@@ -9,7 +9,8 @@
 // rng: the session's generator state (hooks/pick.ts).
 // phrase: the base phrase of the running or next main turn; null when that turn is plain.
 // bag: the phrases still to come before the vocabulary repeats.
-// turnMisses, commitMisses: rolls since each channel's dice last hit.
+// turnMisses, commitMisses, outcomeMisses: rolls since each channel's dice last hit (outcome:
+//   the line for an interrupted turn).
 
 export type TurnPhrase = string | null;
 
@@ -23,6 +24,7 @@ declare module 'claude-code' {
       bag: readonly string[];
       turnMisses: number;
       commitMisses: number;
+      outcomeMisses: number;
     };
   }
 }

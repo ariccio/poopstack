@@ -11,7 +11,7 @@ import {
   turnRate,
 } from './options';
 import { drawPhrase, hashId, nextRandom, prdConstant, roll, warmMisses } from './pick';
-import { commitLine, poolFor } from './vocabulary';
+import { ABORTED_LINE, commitLine, poolFor } from './vocabulary';
 
 // Wiring only: each hook reads what it needs from `$` and hands it to the pure modules. Every
 // hook passes the event on unchanged when the mod is off, the session is not interactive, or the
@@ -24,6 +24,7 @@ const PHRASE = { plugin: 'poopstack', key: 'phrase' } as const;
 const BAG = { plugin: 'poopstack', key: 'bag' } as const;
 const TURN_MISSES = { plugin: 'poopstack', key: 'turnMisses' } as const;
 const COMMIT_MISSES = { plugin: 'poopstack', key: 'commitMisses' } as const;
+const OUTCOME_MISSES = { plugin: 'poopstack', key: 'outcomeMisses' } as const;
 
 // $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
 // typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
@@ -103,6 +104,19 @@ async function ensureSession($: EngineInterface, settings: Settings): Promise<vo
   await drawTurn($, settings);
 }
 
+// The outcome dice joined after the others (decision 47), so a session that began under an
+// earlier version of the mod meets this one with the generator set and these misses unset. This
+// is the only place they are set, for a new session too, so the interrupted-turn tests cover it.
+async function ensureOutcomeDice($: EngineInterface, settings: Settings): Promise<void> {
+  if ((await $.state.get(OUTCOME_MISSES)).value !== undefined) {
+    return;
+  }
+  const rng = need((await $.state.get(RNG)).value, 'rng');
+  const dice = nextRandom(rng);
+  await $.state.set(OUTCOME_MISSES, warmMisses(constantFor(matchedRate(settings)), dice.value));
+  await $.state.set(RNG, dice.state);
+}
+
 // A /config change reloads the module; one that turns `enabled` back on clears a session's off.
 async function reconcileOff($: EngineInterface, settings: Settings): Promise<void> {
   const wasEnabled = (await $.state.get(WAS_ENABLED)).value;
@@ -177,6 +191,28 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
   const shown = shownSoFar(key, await $.store.get(key));
   await $.store.set(key, { shown: shown + 1, at: await $.clock.now() });
   $.ui.toast(commitLine(shown, settings.preset));
+}
+
+// --- the interrupted turn ----------------------------------------------------------------------
+
+// An interrupted turn draws no closing line (FINDINGS 13), so his line is a toast, in regular and
+// maximum only, on the outcome dice; Claude Code's own interrupt row stays as it is.
+async function abortedJoke($: EngineInterface, settings: Settings): Promise<void> {
+  if (!(settings.isEnabled && isInteractive) || settings.preset === 'discreet') {
+    return;
+  }
+  if (await isOff($)) {
+    return;
+  }
+  const rng = need((await $.state.get(RNG)).value, 'rng');
+  const misses = need((await $.state.get(OUTCOME_MISSES)).value, 'outcomeMisses');
+  const dice = nextRandom(rng);
+  const result = roll(constantFor(matchedRate(settings)), misses, dice.value);
+  await $.state.set(RNG, dice.state);
+  await $.state.set(OUTCOME_MISSES, result.misses);
+  if (result.isHit) {
+    $.ui.toast(ABORTED_LINE);
+  }
 }
 
 // Removes the commit counts of sessions untouched past the keep bound (hooks/commits.ts).
@@ -360,6 +396,7 @@ export const register: Register = (on, options) => {
     isInteractive = e.isInteractive;
     await reconcileOff($, settings);
     await ensureSession($, settings);
+    await ensureOutcomeDice($, settings);
     await pruneCommitCounts($, settings);
     return result;
   }).catch((_$, e, next) => next(e));
@@ -369,6 +406,9 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       const wasTyped = isTypedTurn;
       isTypedTurn = false;
+      if (e.reason === 'aborted') {
+        await abortedJoke($, settings);
+      }
       await drawTurn($, settings);
       if (wasTyped) {
         await firstRun($, settings);
