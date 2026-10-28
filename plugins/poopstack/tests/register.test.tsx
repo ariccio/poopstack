@@ -50,14 +50,25 @@ const SEEN_BEFORE = { firstRunSeen: true } as const;
 // Late enough that a count older than the keep bound still has a time after the epoch.
 const NOW = 2 * COMMIT_COUNT_KEEP_MS;
 
+// A promise the test settles by hand.
+function latch(): { readonly promise: Promise<void>; readonly open: () => void } {
+  let open: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
 // How the stand-in engine misbehaves when a test asks: `savedAs` is what a config hook changed a
 // value to on its way in; `isListFailing` and `isStoreSetFailing` make that call throw (the kit
-// then rejects it); `countReadsAs` is what every commit count reads as.
+// then rejects it); `countReadsAs` is what every commit count reads as; `countReadGate` holds a
+// commit count's read open until the test releases it, so the test can act in between.
 type StandIn = {
   readonly savedAs?: boolean | string;
   readonly isListFailing?: boolean;
   readonly isStoreSetFailing?: boolean;
   readonly countReadsAs?: unknown;
+  readonly countReadGate?: { readonly entered: () => void; readonly released: Promise<void> };
 };
 
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
@@ -98,7 +109,11 @@ function engine(
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.id', () => ({ value: 'session-1' }));
   on('clock.now', () => ({ value: NOW }));
-  on('store.get', (_, e) => {
+  on('store.get', async (_, e) => {
+    if (config.countReadGate !== undefined && e.key.startsWith('commitJokes.')) {
+      config.countReadGate.entered();
+      await config.countReadGate.released;
+    }
     const isCount = e.key.startsWith('commitJokes.') && 'countReadsAs' in config;
     return { value: isCount ? config.countReadsAs : store.get(e.key) };
   });
@@ -823,5 +838,68 @@ test(
     expect(seen.toasts[0]?.startsWith(COUNT_RESET_START)).toBe(true);
     expect(seen.toasts[1]).toBe(COMMIT_FIRST);
     expect(seen.storeSets).toEqual(['commitJokes.session-1']);
+  },
+);
+
+test(
+  '/poop off typed while a commit joke is in flight stops it before its write and its toast',
+  { options: ALWAYS },
+  async ($, on) => {
+    const entered = latch();
+    const released = latch();
+    const countReadGate = { entered: entered.open, released: released.promise };
+    const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { countReadGate });
+    on('tool.call', () => COMMITTED);
+    await start($);
+    const call = $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await entered.promise;
+    await $.command.run(run('poop', 'off'));
+    released.open();
+    expect(await call).toEqual(COMMITTED);
+    expect(seen.configSets).toEqual(['poopstack.enabled=false']);
+    expect(seen.storeSets).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+  },
+);
+
+test(
+  'two commits that end together show his two lines in order',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on);
+    on('tool.call', () => COMMITTED);
+    await start($);
+    await Promise.all([
+      $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' }),
+      $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: y"' }),
+    ]);
+    expect(seen.toasts).toEqual([COMMIT_FIRST, COMMIT_SECOND]);
+  },
+);
+
+test(
+  "a row that comes after the next turn started is left to Claude Code, and so is its turn's line",
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    const rowOf = (uuid: string) =>
+      ({
+        message: { type: 'system', name: 'turn_duration', content: [] },
+        door: 'notice',
+        origin: { kind: 'unclassified' },
+        uuid,
+      }) as const;
+    const end = (turnId: string) =>
+      ({ ...TURN_BASE, turnId, isAborted: false, reason: 'answer' }) as const;
+    await $.turn.start({ text: 'go', turnId: 'turn-a' });
+    await $.turn.complete(end('turn-a'));
+    const second = (await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '';
+    await $.turn.start({ text: 'typed during turn a', turnId: 'turn-b' });
+    await $.session.append(rowOf('row-a'));
+    await $.session.append(rowOf('row-b'));
+    await $.turn.complete(end('turn-b'));
+    expect(await closingText($, 'row-a')).toBe('Brewed');
+    expect(await closingText($, 'row-b')).toBe(DONE_OF.get(second) ?? '');
   },
 );

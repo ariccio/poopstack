@@ -76,6 +76,31 @@ type Pairing = {
   reason: TurnCompleteReason | null;
 };
 let pairing: Pairing | null = null;
+// Set when a main turn starts while the turn before it still waits for its `turn_duration` row:
+// a prompt typed during a turn starts the next one at once, and no row names its turn
+// (SessionAppendInput), so the next row could be either turn's. That row is left to Claude Code,
+// and so is the earlier turn's line. An interrupted turn draws no row (FINDINGS 13).
+let isNextRowAmbiguous = false;
+
+// Set the moment `/poopstack off` starts, before any of its awaits, and checked right before each
+// toast and store write: a joke already in flight when off arrives (an await between its own off
+// check and its effect) then ends there. `$.state`'s off is the durable record; this is the
+// synchronous one. A reload starts it over, and the reloaded module reads `$.state`'s off.
+let isStopped = false;
+
+// Every read-then-write of the dice, the bag and the commit count runs one at a time: two Bash
+// calls can end together, and each step awaits the engine between its read and its write. Only
+// hook bodies queue work, never a function the queue runs (that would wait for itself).
+let queueTail: Promise<void> = Promise.resolve();
+function serial<T>(work: () => Promise<T>): Promise<T> {
+  const run = queueTail.then(work);
+  // The caller holds `run` and meets its failure there; the queue only waits for it to settle.
+  queueTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 function need<T>(value: T | undefined, name: string): T {
   if (value === undefined) {
@@ -254,7 +279,14 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
   const key = commitCountKey(await $.session.id());
   const held = readCount(await $.store.get(key));
   const shown = held.kind === 'count' ? held.count.shown : 0;
-  await $.store.set(key, { shown: shown + 1, at: await $.clock.now() });
+  const at = await $.clock.now();
+  if (isStopped) {
+    return;
+  }
+  await $.store.set(key, { shown: shown + 1, at });
+  if (isStopped) {
+    return;
+  }
   if (held.kind === 'malformed') {
     $.ui.toast(COUNT_RESET);
   }
@@ -284,7 +316,7 @@ async function rollOutcome($: EngineInterface, settings: Settings): Promise<bool
 // An interrupted turn draws no closing line (FINDINGS 13), so his line is a toast; Claude Code's
 // own interrupt row stays as it is.
 async function abortedJoke($: EngineInterface, settings: Settings): Promise<void> {
-  if (await rollOutcome($, settings)) {
+  if ((await rollOutcome($, settings)) && !isStopped) {
     $.ui.toast(ABORTED_LINE);
   }
 }
@@ -329,6 +361,9 @@ async function settleClosing($: EngineInterface, settings: Settings): Promise<vo
 }
 
 async function startPairing($: EngineInterface, turnId: string): Promise<void> {
+  if (pairing !== null && pairing.uuid === null && pairing.reason !== 'aborted') {
+    isNextRowAmbiguous = true;
+  }
   const phrase = (await $.state.get(PHRASE)).value ?? null;
   pairing = { turnId, phrase, uuid: null, reason: null };
 }
@@ -338,6 +373,10 @@ async function noteDurationRow(
   settings: Settings,
   uuid: string,
 ): Promise<void> {
+  if (isNextRowAmbiguous) {
+    isNextRowAmbiguous = false;
+    return;
+  }
   if (pairing !== null && pairing.uuid === null) {
     pairing.uuid = uuid;
     await settleClosing($, settings);
@@ -381,8 +420,11 @@ async function pruneCommitCounts($: EngineInterface, settings: Settings): Promis
     const count = held[index];
     return count?.kind === 'count' && isStale(count.count, now);
   });
+  if (isStopped) {
+    return;
+  }
   await Promise.all([...malformed, ...stale].map((key) => $.store.delete(key)));
-  if (malformed.length > 0) {
+  if (malformed.length > 0 && !isStopped) {
     $.ui.toast(COUNT_RESET);
   }
 }
@@ -394,11 +436,14 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
     return;
   }
   isFirstRunChecked = true;
-  if ((await $.store.get(FIRST_RUN)) === true) {
+  if ((await $.store.get(FIRST_RUN)) === true || isStopped) {
     return;
   }
   await $.store.set(FIRST_RUN, true);
   await $.store.delete(FIRST_RUN_BEFORE);
+  if (isStopped) {
+    return;
+  }
   $.ui.toast(
     `Sanitized for your protection. Jokes on ${describeRate(turnRate(settings))}; /poop off stops them.`,
   );
@@ -436,6 +481,7 @@ async function setOption(
 }
 
 async function turnOff($: EngineInterface): Promise<Answer> {
+  isStopped = true;
   await $.state.set(IS_OFF, true);
   const problem = await setOption($, 'enabled', false);
   if (problem !== null) {
@@ -448,6 +494,7 @@ async function turnOff($: EngineInterface): Promise<Answer> {
 }
 
 async function turnOn($: EngineInterface, settings: Settings): Promise<Answer> {
+  isStopped = false;
   await $.state.set(IS_OFF, false);
   const problem = settings.isEnabled ? null : await setOption($, 'enabled', true);
   if (problem !== null) {
@@ -570,9 +617,11 @@ export const register: Register = (on, options) => {
     await registerCommands($);
     const result = await next(e);
     isInteractive = e.isInteractive;
-    await reconcileOff($, settings);
-    await ensureReady($, settings);
-    await pruneCommitCounts($, settings);
+    await serial(async () => {
+      await reconcileOff($, settings);
+      await ensureReady($, settings);
+      await pruneCommitCounts($, settings);
+    });
     return result;
   }).catch((_$, e, next) => next(e));
 
@@ -580,8 +629,10 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     const result = await next(e);
     if (e.agentId === undefined) {
-      await ensureReady($, settings);
-      await startPairing($, e.turnId);
+      await serial(async () => {
+        await ensureReady($, settings);
+        await startPairing($, e.turnId);
+      });
     }
     return result;
   }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
@@ -591,7 +642,7 @@ export const register: Register = (on, options) => {
     const result = await next(e);
     const isDuration = e.message.type === 'system' && e.message.name === 'turn_duration';
     if (isDuration && e.agentId === undefined) {
-      await noteDurationRow($, settings, e.uuid);
+      await serial(() => noteDurationRow($, settings, e.uuid));
     }
     return result;
   }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
@@ -599,7 +650,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
     if (e.agentId === undefined) {
-      await endMainTurn($, settings, e);
+      await serial(() => endMainTurn($, settings, e));
     }
     return result;
   }).catch((_$, e, next) => next(e));
@@ -617,7 +668,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e);
     if (result.deny === undefined && commitKind(result.result) !== null) {
-      await commitJoke($, settings);
+      await serial(() => commitJoke($, settings));
     }
     return result;
   }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
