@@ -66,14 +66,17 @@ function latch(): { readonly promise: Promise<void>; readonly open: () => void }
 // How the stand-in engine misbehaves when a test asks: `savedAs` is what a config hook changed a
 // value to on its way in; `isListFailing` and `isStoreSetFailing` make that call throw (the kit
 // then rejects it); `countReadsAs` is what every commit count reads as; `countReadGate` holds a
-// commit count's read open until the test releases it, so the test can act in between.
+// commit count's read open until the test releases it, so the test can act in between, and
+// `firstRunSetGate` does the same for the first-run flag's write.
 type StandIn = {
   readonly savedAs?: boolean | string;
   readonly isListFailing?: boolean;
   readonly isStoreSetFailing?: boolean;
   readonly countReadsAs?: unknown;
-  readonly countReadGate?: { readonly entered: () => void; readonly released: Promise<void> };
+  readonly countReadGate?: Gate;
+  readonly firstRunSetGate?: Gate;
 };
+type Gate = { readonly entered: () => void; readonly released: Promise<void> };
 
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
 // they were handed, so a test reads what the mod passed on. `holder` names who registered each
@@ -127,7 +130,11 @@ function engine(
     const isCount = e.key.startsWith('commitJokes.') && 'countReadsAs' in config;
     return { value: isCount ? config.countReadsAs : store.get(e.key) };
   });
-  on('store.set', (_, e) => {
+  on('store.set', async (_, e) => {
+    if (config.firstRunSetGate !== undefined && e.key === 'firstRunSeen') {
+      config.firstRunSetGate.entered();
+      await config.firstRunSetGate.released;
+    }
     if (config.isStoreSetFailing === true) {
       throw new Error('the store failed');
     }
@@ -947,5 +954,68 @@ test(
     released.open();
     await seen.clock.settle();
     expect(seen.toasts).toEqual([COMMIT_FIRST]);
+  },
+);
+
+test(
+  "a commit whose count read stalls never holds the next turn's hooks",
+  { options: ALWAYS },
+  async ($, on) => {
+    const entered = latch();
+    const released = latch();
+    const countReadGate = { entered: entered.open, released: released.promise };
+    const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { countReadGate });
+    on('tool.call', () => COMMITTED);
+    await start($);
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    await entered.promise;
+    await $.turn.start({ text: 'next', turnId: 'turn-2' });
+    await $.turn.complete({ ...TURN, turnId: 'turn-2' });
+    released.open();
+    await seen.clock.settle();
+    expect(seen.toasts).toEqual([COMMIT_FIRST]);
+  },
+);
+
+test(
+  '/poop off typed while the first-run flag is being written stops its cleanup and its toast',
+  { options: ALWAYS },
+  async ($, on) => {
+    const entered = latch();
+    const released = latch();
+    const firstRunSetGate = { entered: entered.open, released: released.promise };
+    const seen = engine(on, () => 'poopstack', {}, { firstRunSetGate });
+    on('prompt.submit', (_, e) => ({ text: e.text }));
+    await start($);
+    await $.prompt.submit({ text: 'hello', origin: { kind: 'composer' }, wait: false });
+    const done = $.turn.complete(TURN);
+    await entered.promise;
+    await $.command.run(run('poop', 'off'));
+    released.open();
+    await done;
+    expect(seen.storeDeletes).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+  },
+);
+
+test(
+  'a turn interrupted after the next one started leaves that next turn its own row',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on);
+    await start($);
+    const end = (turnId: string, reason: 'answer' | 'aborted') =>
+      ({ ...TURN_BASE, turnId, isAborted: reason === 'aborted', reason }) as const;
+    await $.turn.start({ text: 'go', turnId: 'turn-a' });
+    await $.turn.start({ text: 'typed during turn a', turnId: 'turn-b' });
+    await $.turn.complete(end('turn-a', 'aborted'));
+    await $.session.append({
+      message: { type: 'system', name: 'turn_duration', content: [] },
+      door: 'notice',
+      origin: { kind: 'unclassified' },
+      uuid: 'row-b',
+    });
+    await $.turn.complete(end('turn-b', 'answer'));
+    expect(DONE.has(await closingText($, 'row-b'))).toBe(true);
   },
 );

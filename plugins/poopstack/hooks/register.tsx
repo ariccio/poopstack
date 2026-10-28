@@ -79,8 +79,9 @@ let pairing: Pairing | null = null;
 // Set when a main turn starts while the turn before it still waits for its `turn_duration` row:
 // a prompt typed during a turn starts the next one at once, and no row names its turn
 // (SessionAppendInput), so the next row could be either turn's. That row is left to Claude Code,
-// and so is the earlier turn's line. An interrupted turn draws no row (FINDINGS 13).
-let isNextRowAmbiguous = false;
+// and so is the earlier turn's line. It holds the earlier turn's id: an interrupted turn draws no row
+// (FINDINGS 13), so its interruption clears it.
+let ambiguousAfter: string | null = null;
 
 // Set the moment `/poopstack off` starts, before any of its awaits, and checked right before each
 // toast and store write: a joke already in flight when off arrives (an await between its own off
@@ -88,19 +89,28 @@ let isNextRowAmbiguous = false;
 // synchronous one. A reload starts it over, and the reloaded module reads `$.state`'s off.
 let isStopped = false;
 
-// Every read-then-write of the dice, the bag and the commit count runs one at a time: two Bash
-// calls can end together, and each step awaits the engine between its read and its write. Only
-// hook bodies queue work, never a function the queue runs (that would wait for itself).
-let queueTail: Promise<void> = Promise.resolve();
-function serial<T>(work: () => Promise<T>): Promise<T> {
-  const run = queueTail.then(work);
-  // The caller holds `run` and meets its failure there; the queue only waits for it to settle.
-  queueTail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+// A queue runs its work one at a time: two Bash calls can end together, and each step awaits the
+// engine between its read and its write. Work a queue runs never queues more on the same queue
+// (it would wait for itself).
+type Queue = <T>(work: () => Promise<T>) => Promise<T>;
+function makeQueue(): Queue {
+  let tail: Promise<void> = Promise.resolve();
+  function queued<T>(work: () => Promise<T>): Promise<T> {
+    const run = tail.then(work);
+    // The caller holds `run` and meets its failure there; the queue only waits for it to settle.
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+  return queued;
 }
+// The dice, the bag and the closing-line pairing: every turn hook's read-then-write.
+const serial = makeQueue();
+// The commit counts in $.store, on a queue of their own, so a slow store never holds a turn's
+// hooks (Codex recheck finding 1).
+const serialCount = makeQueue();
 
 function need<T>(value: T | undefined, name: string): T {
   if (value === undefined) {
@@ -224,7 +234,7 @@ async function spinnerPhrase(
   }
   const phrase = (await $.state.get(PHRASE)).value ?? null;
   const isStillShown = poolFor(settings.preset).some((entry) => entry.working === phrase);
-  return isStillShown ? phrase : null;
+  return isStillShown && !isStopped ? phrase : null;
 }
 
 // The word a closing line was given when its turn was paired, if the preset in force now may
@@ -243,7 +253,7 @@ async function closingWord(
     return null;
   }
   const word = (await $.state.get({ ...CLOSING_WORD, id: requestId })).value;
-  return word !== undefined && isShownNow(word, settings.preset) ? word : null;
+  return word !== undefined && isShownNow(word, settings.preset) && !isStopped ? word : null;
 }
 
 // Claude Code's own closing line, as drawn with the paired word, and the label after it (feature
@@ -270,9 +280,17 @@ function withLabel(
 
 // --- the commit line ---------------------------------------------------------------------------
 
+// The commit line, after the Bash call's result: its dice on the turn queue (state only, quick),
+// then its count and toast on the count queue.
 async function commitJoke($: EngineInterface, settings: Settings): Promise<void> {
+  if (await serial(() => rollCommit($, settings))) {
+    await serialCount(() => countAndShow($, settings));
+  }
+}
+
+async function rollCommit($: EngineInterface, settings: Settings): Promise<boolean> {
   if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
-    return;
+    return false;
   }
   const rng = need((await $.state.get(RNG)).value, 'rng');
   const misses = need((await $.state.get(COMMIT_MISSES)).value, 'commitMisses');
@@ -280,9 +298,10 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
   const result = roll(constantFor(matchedRate(settings)), misses, dice.value);
   await $.state.set(RNG, dice.state);
   await $.state.set(COMMIT_MISSES, result.misses);
-  if (!result.isHit) {
-    return;
-  }
+  return result.isHit;
+}
+
+async function countAndShow($: EngineInterface, settings: Settings): Promise<void> {
   const key = commitCountKey(await $.session.id());
   const held = readCount(await $.store.get(key));
   const shown = held.kind === 'count' ? held.count.shown : 0;
@@ -379,7 +398,7 @@ async function settleClosing($: EngineInterface, settings: Settings): Promise<vo
 
 async function startPairing($: EngineInterface, turnId: string): Promise<void> {
   if (pairing !== null && pairing.uuid === null && pairing.reason !== 'aborted') {
-    isNextRowAmbiguous = true;
+    ambiguousAfter = pairing.turnId;
   }
   const phrase = (await $.state.get(PHRASE)).value ?? null;
   pairing = { turnId, phrase, uuid: null, reason: null };
@@ -390,8 +409,8 @@ async function noteDurationRow(
   settings: Settings,
   uuid: string,
 ): Promise<void> {
-  if (isNextRowAmbiguous) {
-    isNextRowAmbiguous = false;
+  if (ambiguousAfter !== null) {
+    ambiguousAfter = null;
     return;
   }
   if (pairing !== null && pairing.uuid === null) {
@@ -411,6 +430,9 @@ async function endMainTurn(
   isTypedTurn = false;
   if (e.reason === 'aborted') {
     await abortedJoke($, settings);
+  }
+  if (e.reason === 'aborted' && e.turnId === ambiguousAfter) {
+    ambiguousAfter = null;
   }
   if (pairing !== null && pairing.turnId === e.turnId) {
     pairing.reason = e.reason;
@@ -457,6 +479,9 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
     return;
   }
   await $.store.set(FIRST_RUN, true);
+  if (isStopped) {
+    return;
+  }
   await $.store.delete(FIRST_RUN_BEFORE);
   if (isStopped) {
     return;
@@ -681,10 +706,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e);
     if (result.deny === undefined && commitKind(result.result) !== null) {
-      afterTheCall(
-        $,
-        serial(() => commitJoke($, settings)),
-      );
+      afterTheCall($, commitJoke($, settings));
     }
     return result;
   }).catch((_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
