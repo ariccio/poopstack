@@ -8,7 +8,7 @@ import type {
   TurnCompleteInput,
   TurnCompleteReason,
 } from 'claude-code';
-import { COMMIT_COUNT_PREFIX, commitCountKey, isStale, shownSoFar } from './commits';
+import { COMMIT_COUNT_PREFIX, commitCountKey, isStale, readCount } from './commits';
 import { commitKind } from './git';
 import {
   describeRate,
@@ -50,6 +50,10 @@ const CLOSING_WORD = { plugin: 'poopstack', key: 'closingWord' } as const;
 // $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
 // typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
 // removed when this one is written.
+// Said when a stored commit count could not be read and was replaced (the store is shared with
+// the world: lane 2 of the error-handling rules). His pair then starts again at its first line.
+const COUNT_RESET =
+  'p(oop)stack could not read a saved commit-joke count, so it started that count again.';
 const FIRST_RUN = 'firstRunSeen';
 const FIRST_RUN_BEFORE = 'firstRunShown';
 
@@ -248,8 +252,12 @@ async function commitJoke($: EngineInterface, settings: Settings): Promise<void>
     return;
   }
   const key = commitCountKey(await $.session.id());
-  const shown = shownSoFar(key, await $.store.get(key));
+  const held = readCount(await $.store.get(key));
+  const shown = held.kind === 'count' ? held.count.shown : 0;
   await $.store.set(key, { shown: shown + 1, at: await $.clock.now() });
+  if (held.kind === 'malformed') {
+    $.ui.toast(COUNT_RESET);
+  }
   $.ui.toast(commitLine(shown, settings.preset));
 }
 
@@ -358,7 +366,8 @@ async function endMainTurn(
   }
 }
 
-// Removes the commit counts of sessions untouched past the keep bound (hooks/commits.ts).
+// Removes the commit counts of sessions untouched past the keep bound (hooks/commits.ts), and any
+// count it cannot read, saying so once: deleted, a malformed value cannot be met again.
 async function pruneCommitCounts($: EngineInterface, settings: Settings): Promise<void> {
   if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
     return;
@@ -366,8 +375,16 @@ async function pruneCommitCounts($: EngineInterface, settings: Settings): Promis
   const now = await $.clock.now();
   const keys = (await $.store.keys()).filter((key) => key.startsWith(COMMIT_COUNT_PREFIX));
   const counts = await Promise.all(keys.map((key) => $.store.get(key)));
-  const stale = keys.filter((key, index) => isStale(key, counts[index], now));
-  await Promise.all(stale.map((key) => $.store.delete(key)));
+  const held = counts.map((value) => readCount(value));
+  const malformed = keys.filter((_key, index) => held[index]?.kind === 'malformed');
+  const stale = keys.filter((_key, index) => {
+    const count = held[index];
+    return count?.kind === 'count' && isStale(count.count, now);
+  });
+  await Promise.all([...malformed, ...stale].map((key) => $.store.delete(key)));
+  if (malformed.length > 0) {
+    $.ui.toast(COUNT_RESET);
+  }
 }
 
 // --- the first run on this machine -------------------------------------------------------------

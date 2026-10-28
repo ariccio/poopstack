@@ -48,9 +48,15 @@ const SEEN_BEFORE = { firstRunSeen: true } as const;
 // Late enough that a count older than the keep bound still has a time after the epoch.
 const NOW = 2 * COMMIT_COUNT_KEEP_MS;
 
-// How the stand-in answers /config: `savedAs` is what a config hook changed the value to on its
-// way in; `isListFailing` makes the list throw (the kit then rejects the call).
-type ConfigStandIn = { readonly savedAs?: boolean | string; readonly isListFailing?: boolean };
+// How the stand-in engine misbehaves when a test asks: `savedAs` is what a config hook changed a
+// value to on its way in; `isListFailing` and `isStoreSetFailing` make that call throw (the kit
+// then rejects it); `countReadsAs` is what every commit count reads as.
+type StandIn = {
+  readonly savedAs?: boolean | string;
+  readonly isListFailing?: boolean;
+  readonly isStoreSetFailing?: boolean;
+  readonly countReadsAs?: unknown;
+};
 
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
 // they were handed, so a test reads what the mod passed on. `holder` names who registered each
@@ -59,7 +65,7 @@ function engine(
   on: On,
   holder: (name: string) => string = () => 'poopstack',
   stored: Readonly<Record<string, unknown>> = SEEN_BEFORE,
-  config: ConfigStandIn = {},
+  config: StandIn = {},
 ): Seen {
   const seen: Seen = { toasts: [], configSets: [], storeSets: [], storeDeletes: [] };
   const store = new Map<string, unknown>(Object.entries(stored));
@@ -90,8 +96,14 @@ function engine(
   on('session.start', (_, e) => ({ cwd: e.cwd }));
   on('session.id', () => ({ value: 'session-1' }));
   on('clock.now', () => ({ value: NOW }));
-  on('store.get', (_, e) => ({ value: store.get(e.key) }));
+  on('store.get', (_, e) => {
+    const isCount = e.key.startsWith('commitJokes.') && 'countReadsAs' in config;
+    return { value: isCount ? config.countReadsAs : store.get(e.key) };
+  });
   on('store.set', (_, e) => {
+    if (config.isStoreSetFailing === true) {
+      throw new Error('the store failed');
+    }
     seen.storeSets.push(e.key);
     store.set(e.key, e.value);
     return { value: undefined };
@@ -691,10 +703,9 @@ test(
   'a failure inside the mod after a commit ran does not run the commit again',
   { options: ALWAYS },
   async ($, on) => {
-    // A stored count this mod could not have written makes the commit line throw after the call
-    // settled; the hook's catch then hands back the settled answer without calling again.
-    const stored = { ...SEEN_BEFORE, 'commitJokes.session-1': 'malformed' };
-    const seen = engine(on, () => 'poopstack', stored);
+    // A store that fails makes the commit line throw after the call settled; the hook's catch then
+    // hands back the settled answer without calling again.
+    const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { isStoreSetFailing: true });
     let calls = 0;
     on('tool.call', () => {
       calls += 1;
@@ -765,5 +776,40 @@ test(
     writes.length = 0;
     await $.turn.complete(TURN);
     expect(writes.includes('phrase')).toBe(true);
+  },
+);
+
+const COUNT_RESET_START = 'p(oop)stack could not read a saved commit-joke count';
+
+test(
+  "a session's start removes a commit count it cannot read, and says so once",
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on, () => 'poopstack', {
+      ...SEEN_BEFORE,
+      'commitJokes.bad': 'malformed',
+      'commitJokes.good': { shown: 1, at: NOW },
+    });
+    await start($);
+    expect(seen.storeDeletes).toEqual(['commitJokes.bad']);
+    expect(seen.toasts.length).toBe(1);
+    expect(seen.toasts[0]?.startsWith(COUNT_RESET_START)).toBe(true);
+    await start($);
+    expect(seen.toasts.length).toBe(1);
+  },
+);
+
+test(
+  'a commit that meets a count it cannot read says so and starts the pair again',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { countReadsAs: { shown: 'two' } });
+    on('tool.call', () => COMMITTED);
+    await start($);
+    await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    expect(seen.toasts.length).toBe(2);
+    expect(seen.toasts[0]?.startsWith(COUNT_RESET_START)).toBe(true);
+    expect(seen.toasts[1]).toBe(COMMIT_FIRST);
+    expect(seen.storeSets).toEqual(['commitJokes.session-1']);
   },
 );

@@ -23,22 +23,27 @@ function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-// Only this mod writes these keys, so a value of another shape is a broken invariant.
-function checked(key: string, held: unknown): CommitCount {
+// What a stored commit count holds. The store is shared with the world (the error-handling rules,
+// lane 2): a hand edit, another build of the mod or another plugin can leave any value there, so
+// a value of another shape is reported and replaced by the caller, never thrown at every start.
+export type StoredCount =
+  | { readonly kind: 'count'; readonly count: CommitCount }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'malformed' };
+
+export function readCount(held: unknown): StoredCount {
+  if (held === undefined) {
+    return { kind: 'none' };
+  }
   if (isRecord(held)) {
     const { shown, at } = held;
     if (isCount(shown) && isCount(at)) {
-      return { shown, at };
+      return { kind: 'count', count: { shown, at } };
     }
   }
-  throw new Error(`poopstack: $.store ${key} is not a commit count ({ shown, at })`);
+  return { kind: 'malformed' };
 }
 
-// The commit lines this session showed before now; nothing stored means none.
-export function shownSoFar(key: string, held: unknown): number {
-  return held === undefined ? 0 : checked(key, held).shown;
-}
-
-export function isStale(key: string, held: unknown, now: number): boolean {
-  return now - checked(key, held).at > COMMIT_COUNT_KEEP_MS;
+export function isStale(count: CommitCount, now: number): boolean {
+  return now - count.at > COMMIT_COUNT_KEEP_MS;
 }
