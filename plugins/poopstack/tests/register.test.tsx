@@ -70,7 +70,8 @@ function latch(): { readonly promise: Promise<void>; readonly open: () => void }
 // commit count's read open until the test releases it, so the test can act in between, and
 // `firstRunSetGate` does the same for the first-run flag's write. `rowOwner` names who owns the
 // mod's /config rows (`poopstack@inline` when not given); `hasNoRows` lists none, as a session
-// that loaded the mod from its mods folder did.
+// that loaded the mod from its mods folder did. `isListLagging` lists no command until
+// session.start has ended, as Claude Code did (measured 2026-10-28).
 type StandIn = {
   readonly savedAs?: boolean | string;
   readonly isListFailing?: boolean;
@@ -80,6 +81,7 @@ type StandIn = {
   readonly rowOwner?: string;
   readonly hasNoRows?: boolean;
   readonly firstRunSetGate?: Gate;
+  readonly isListLagging?: boolean;
 };
 type Gate = { readonly entered: () => void; readonly released: Promise<void> };
 
@@ -133,8 +135,12 @@ function engine(
   };
   const store = new Map<string, unknown>(Object.entries(stored));
   on('command.register', (_, e) => ({ value: { command: e.name } }));
+  let hasStarted = false;
   on('command.list', () => ({
-    value: NAMES.map((name) => ({ name, description: '', source: 'plugin', plugin: holder(name) })),
+    value:
+      config.isListLagging === true && !hasStarted
+        ? []
+        : NAMES.map((name) => ({ name, description: '', source: 'plugin', plugin: holder(name) })),
   }));
   on('command.run', () => ({ text: 'answered by the other plugin' }));
   on('config.list', () => {
@@ -147,7 +153,10 @@ function engine(
     seen.configSets.push(`${e.key}=${String(e.value)}`);
     return { value: config.savedAs ?? e.value };
   });
-  on('session.start', (_, e) => ({ cwd: e.cwd }));
+  on('session.start', (_, e) => {
+    hasStarted = true;
+    return { cwd: e.cwd };
+  });
   on('session.id', () => ({ value: 'session-1' }));
   on('store.get', async (_, e) => {
     if (config.countReadGate !== undefined && e.key.startsWith('commitJokes.')) {
@@ -1086,5 +1095,16 @@ test(
     const result = await $.command.run(run('poopstack', 'poopmaxxing'));
     expect(result.text).toBe('Preset is now poopmaxxing: jokes on every turn.');
     expect(seen.configSets).toEqual(['poopstack.preset=poopmaxxing']);
+  },
+);
+
+test(
+  'commands registered at session start are answered though the list showed them only later',
+  { options: ALWAYS },
+  async ($, on) => {
+    engine(on, () => 'poopstack', SEEN_BEFORE, { isListLagging: true });
+    await start($);
+    const result = await $.command.run(run('poopstack', 'status'));
+    expect(result.text).toBe('On · regular · jokes on every turn.');
   },
 );
