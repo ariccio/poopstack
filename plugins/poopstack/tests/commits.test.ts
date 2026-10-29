@@ -25,6 +25,8 @@ test('a stored value of any other shape reads as malformed, never as a count', (
 
 test('a count is stale only once it is untouched past the keep bound', () => {
   const at = 1_000;
-  expect(isStale({ shown: 1, at }, at + COMMIT_COUNT_KEEP_MS)).toBe(false);
-  expect(isStale({ shown: 1, at }, at + COMMIT_COUNT_KEEP_MS + 1)).toBe(true);
+  const atTheBound = at + COMMIT_COUNT_KEEP_MS;
+  const pastTheBound = atTheBound + 1;
+  expect(isStale({ shown: 1, at }, atTheBound)).toBe(false);
+  expect(isStale({ shown: 1, at }, pastTheBound)).toBe(true);
 });

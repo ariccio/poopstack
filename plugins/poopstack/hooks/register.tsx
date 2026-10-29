@@ -1,10 +1,13 @@
 import type {
+  CommandInfo,
   EngineInterface,
+  On,
   Register,
   RenderElement,
   RenderInput,
   RenderPropsOf,
   RenderSurface,
+  SessionAppendInput,
   TurnCompleteInput,
   TurnCompleteReason,
 } from 'claude-code';
@@ -124,6 +127,17 @@ function isStoppedNow(): boolean {
 // `/poopstack off` is read separately (`isOff`), since it needs an await.
 function isActive(settings: Settings): boolean {
   return settings.isEnabled && isInteractive;
+}
+
+// The two negations, each a named step, for the checks that leave early.
+function isNotActive(settings: Settings): boolean {
+  const isOn = isActive(settings);
+  return !isOn;
+}
+
+function isNotStoppedNow(): boolean {
+  const isStoppedAtThisMoment = isStoppedNow();
+  return !isStoppedAtThisMoment;
 }
 
 // A queue runs its work one at a time: two Bash calls can end together, and each step awaits the
@@ -267,7 +281,8 @@ async function ensureReady($: EngineInterface, settings: Settings): Promise<void
 async function reconcileOff($: EngineInterface, settings: Settings): Promise<void> {
   const wasEnabledRead = await $.state.get(WAS_ENABLED);
   const wasEnabled = wasEnabledRead.value;
-  if (settings.isEnabled && wasEnabled === false) {
+  const wasTurnedOffBefore = wasEnabled === false;
+  if (settings.isEnabled && wasTurnedOffBefore) {
     await $.state.set(IS_OFF, false);
   }
   await $.state.set(WAS_ENABLED, settings.isEnabled);
@@ -281,11 +296,14 @@ async function spinnerPhrase(
   surface: RenderSurface,
   props: Readonly<RenderPropsOf['Spinner']>,
 ): Promise<string | null> {
-  if (!isActive(settings) || props.message !== null) {
+  const hasEngineMessage = props.message !== null;
+  if (isNotActive(settings) || hasEngineMessage) {
     return null;
   }
   // Off the terminal the word is the step's own text; only the bare "Working" is replaced.
-  if (surface !== 'terminal' && props.word !== 'Working') {
+  const isOffTerminal = surface !== 'terminal';
+  const isStepText = props.word !== 'Working';
+  if (isOffTerminal && isStepText) {
     return null;
   }
   const isOffForSession = await isOff($);
@@ -325,8 +343,10 @@ async function closingWord(
   settings: Settings,
   e: RenderInput<'TurnDuration'>,
 ): Promise<string | null> {
-  const isExpandedOrWaiting = e.props.isExpanded === true || e.props.waitingFor !== undefined;
-  if (!isActive(settings) || isExpandedOrWaiting) {
+  const isExpanded = e.props.isExpanded === true;
+  const isWaiting = e.props.waitingFor !== undefined;
+  const isExpandedOrWaiting = isExpanded || isWaiting;
+  if (isNotActive(settings) || isExpandedOrWaiting) {
     return null;
   }
   const isOffForSession = await isOff($);
@@ -335,7 +355,8 @@ async function closingWord(
   }
   const closingWordRead = await $.state.get({ ...CLOSING_WORD, id: e.requestId });
   const word = closingWordRead.value;
-  if (word === undefined || isStoppedNow()) {
+  const isUnpaired = word === undefined;
+  if (isUnpaired || isStoppedNow()) {
     return null;
   }
   const isAllowedNow = isShownNow(word, settings.preset);
@@ -378,7 +399,7 @@ function withLabel(
 // --- the commit line ---------------------------------------------------------------------------
 
 async function rollCommit($: EngineInterface, settings: Settings): Promise<boolean> {
-  if (!isActive(settings)) {
+  if (isNotActive(settings)) {
     return false;
   }
   const isOffForSession = await isOff($);
@@ -453,7 +474,8 @@ function noticeCommit($: EngineInterface, settings: Settings, callResult: unknow
 // The outcome lines (interrupted, error) share one set of dice at the matched rate, in regular
 // and maximum only; false when the mod is off or the preset is discreet.
 async function rollOutcome($: EngineInterface, settings: Settings): Promise<boolean> {
-  if (!isActive(settings) || settings.preset === 'discreet') {
+  const isDiscreet = settings.preset === 'discreet';
+  if (isNotActive(settings) || isDiscreet) {
     return false;
   }
   const isOffForSession = await isOff($);
@@ -476,7 +498,7 @@ async function rollOutcome($: EngineInterface, settings: Settings): Promise<bool
 // own interrupt row stays as it is.
 async function abortedJoke($: EngineInterface, settings: Settings): Promise<void> {
   const isHit = await rollOutcome($, settings);
-  if (isHit && !isStoppedNow()) {
+  if (isHit && isNotStoppedNow()) {
     $.ui.toast(ABORTED_LINE);
   }
 }
@@ -484,7 +506,7 @@ async function abortedJoke($: EngineInterface, settings: Settings): Promise<void
 // --- the first run on this machine -------------------------------------------------------------
 
 async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
-  if (isFirstRunChecked || !isActive(settings)) {
+  if (isFirstRunChecked || isNotActive(settings)) {
     return;
   }
   const isOffForSession = await isOff($);
@@ -493,7 +515,8 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
   }
   isFirstRunChecked = true;
   const firstRunStored = await $.store.get(FIRST_RUN);
-  if (firstRunStored === true || isStoppedNow()) {
+  const isSeenBefore = firstRunStored === true;
+  if (isSeenBefore || isStoppedNow()) {
     return;
   }
   await $.store.set(FIRST_RUN, true);
@@ -524,7 +547,7 @@ async function pairedWord(
     const isHit = await rollOutcome($, settings);
     return isHit ? ERROR_WORD : null;
   }
-  if (!isActive(settings)) {
+  if (isNotActive(settings)) {
     return null;
   }
   const isOffForSession = await isOff($);
@@ -532,7 +555,10 @@ async function pairedWord(
     return null;
   }
   const done = doneFor(phrase, settings.preset);
-  if (done === null || reason === 'aborted') {
+  if (done === null) {
+    return null;
+  }
+  if (reason === 'aborted') {
     return null;
   }
   return reason === 'refusal' ? REFUSED_WORD : done;
@@ -570,7 +596,8 @@ function isAwaitingRow(held: Pairing): boolean {
 
 async function startPairing($: EngineInterface, turnId: string): Promise<void> {
   const held = pairing;
-  if (held !== null && isAwaitingRow(held)) {
+  const isHeld = held !== null;
+  if (isHeld && isAwaitingRow(held)) {
     ambiguousAfter = held.turnId;
   }
   const phraseRead = await $.state.get(PHRASE);
@@ -639,10 +666,12 @@ async function endMainTurn(
 ): Promise<void> {
   const wasTyped = isTypedTurn;
   isTypedTurn = false;
-  if (e.reason === 'aborted') {
+  const isAborted = e.reason === 'aborted';
+  if (isAborted) {
     await abortedJoke($, settings);
   }
-  if (e.reason === 'aborted' && e.turnId === ambiguousAfter) {
+  const isAmbiguousTurn = e.turnId === ambiguousAfter;
+  if (isAborted && isAmbiguousTurn) {
     ambiguousAfter = null;
   }
   await noteTurnEnd($, settings, e.turnId, e.reason);
@@ -671,7 +700,9 @@ function countsToRemove(
   for (const { key, held } of counts) {
     if (held.kind === 'malformed') {
       malformed.push(key);
-    } else if (held.kind === 'count' && isStale(held.count, now)) {
+    }
+    const isCountKind = held.kind === 'count';
+    if (isCountKind && isStale(held.count, now)) {
       stale.push(key);
     }
   }
@@ -681,7 +712,7 @@ function countsToRemove(
 // Removes the commit counts of sessions untouched past the keep bound (hooks/commits.ts), and any
 // count it cannot read, saying so once: deleted, a malformed value cannot be met again.
 async function pruneCommitCounts($: EngineInterface, settings: Settings): Promise<void> {
-  if (!isActive(settings)) {
+  if (isNotActive(settings)) {
     return;
   }
   const isOffForSession = await isOff($);
@@ -700,7 +731,8 @@ async function pruneCommitCounts($: EngineInterface, settings: Settings): Promis
   const toDelete = [...malformed, ...stale];
   const deletions = toDelete.map(async (key) => $.store.delete(key));
   await Promise.all(deletions);
-  if (malformed.length > 0 && !isStoppedNow()) {
+  const hasMalformed = malformed.length > 0;
+  if (hasMalformed && isNotStoppedNow()) {
     $.ui.toast(COUNT_RESET);
   }
 }
@@ -812,7 +844,9 @@ async function statusText($: EngineInterface, settings: Settings): Promise<strin
 async function answer($: EngineInterface, settings: Settings, args: string): Promise<Answer> {
   const trimmed = args.trim();
   const verb = trimmed.toLowerCase();
-  if (verb === '' || verb === 'status') {
+  const isBare = verb === '';
+  const isStatus = verb === 'status';
+  if (isBare || isStatus) {
     const text = await statusText($, settings);
     return { text };
   }
@@ -830,6 +864,14 @@ async function answer($: EngineInterface, settings: Settings, args: string): Pro
   };
 }
 
+// Whether a listed command is this plugin's own registration of `command`.
+function isOwnEntry(entry: CommandInfo, command: string, plugin: string): boolean {
+  const isSameName = entry.name === command;
+  const isFromPlugin = entry.source === 'plugin';
+  const isThisPlugin = entry.plugin === plugin;
+  return isSameName && isFromPlugin && isThisPlugin;
+}
+
 // The answer to one of the mod's own names, or null for a name another plugin holds.
 // Whether a name is this plugin's, read from the command list when the command runs. Names
 // registered during session.start are listed only after it ends (measured 2026-10-28: the list
@@ -838,10 +880,7 @@ async function answer($: EngineInterface, settings: Settings, args: string): Pro
 // for the commands' catch, which cannot wait for the list.
 async function isOwnCommand($: EngineInterface, command: string): Promise<boolean> {
   const listed = await $.command.list();
-  const isOwn = listed.some(
-    (entry) =>
-      entry.name === command && entry.source === 'plugin' && entry.plugin === $.plugin.name,
-  );
+  const isOwn = listed.some((entry) => isOwnEntry(entry, command, $.plugin.name));
   if (isOwn) {
     owned.add(command);
   } else {
@@ -928,6 +967,39 @@ async function registerCommands($: EngineInterface): Promise<void> {
   await Promise.allSettled(registrations);
 }
 
+// One hook per visible name, each matched by its literal name (the catch: `failedOrPass`). A
+// top-level helper that receives `on` keeps `register` under Biome's 75-line cap (decision 82);
+// the engine accepts hooks written inside the `on(...)` call here as in `register`.
+function hookCommands(on: On, settings: Settings): void {
+  on('command.run', { command: 'poopstack' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'poop' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'commode' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'porcelain' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'agentic-outhouse' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+}
+
+// Whether an appended row is the main loop's `turn_duration` notice, the row a closing line
+// draws for. Each check leaves early, so `name` is read only on a system row.
+function isMainDurationRow(e: SessionAppendInput): boolean {
+  if (e.agentId !== undefined) {
+    return false;
+  }
+  if (e.message.type !== 'system') {
+    return false;
+  }
+  return e.message.name === 'turn_duration';
+}
+
 export const register: Register = (on, options) => {
   const settings = readSettings(options);
 
@@ -951,8 +1023,7 @@ export const register: Register = (on, options) => {
   // An observer: the main loop's `turn_duration` notice is the row its closing line draws for.
   on('session.append', { door: 'notice' }, async ($, e, next) => {
     const result = await next(e);
-    const isDuration = e.message.type === 'system' && e.message.name === 'turn_duration';
-    if (isDuration && e.agentId === undefined) {
+    if (isMainDurationRow(e)) {
       await serial(async () => noteDurationRow($, settings, e.uuid));
     }
     return result;
@@ -969,7 +1040,9 @@ export const register: Register = (on, options) => {
   // An observer: the prompt goes on unchanged; only where it came from is noted.
   on('prompt.submit', async (_$, e, next) => {
     const result = await next(e);
-    if (e.origin.kind === 'composer' && e.isMeta !== true) {
+    const isComposer = e.origin.kind === 'composer';
+    const isMeta = e.isMeta === true;
+    if (isComposer && !isMeta) {
       isTypedTurn = true;
     }
     return result;
@@ -1002,20 +1075,5 @@ export const register: Register = (on, options) => {
     return withLabel($, e, drawn, word, settings.preset);
   }).catch(passOn);
 
-  // One hook per visible name, each matched by its literal name (the catch: `failedOrPass`).
-  on('command.run', { command: 'poopstack' }, async ($, e, next) =>
-    answerOrPass($, settings, e, next),
-  ).catch(failedOrPass);
-  on('command.run', { command: 'poop' }, async ($, e, next) =>
-    answerOrPass($, settings, e, next),
-  ).catch(failedOrPass);
-  on('command.run', { command: 'commode' }, async ($, e, next) =>
-    answerOrPass($, settings, e, next),
-  ).catch(failedOrPass);
-  on('command.run', { command: 'porcelain' }, async ($, e, next) =>
-    answerOrPass($, settings, e, next),
-  ).catch(failedOrPass);
-  on('command.run', { command: 'agentic-outhouse' }, async ($, e, next) =>
-    answerOrPass($, settings, e, next),
-  ).catch(failedOrPass);
+  hookCommands(on, settings);
 };

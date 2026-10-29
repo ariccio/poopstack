@@ -1,0 +1,77 @@
+id: mixed-logic-takes-a-name
+language: TypeScript
+severity: error
+message: "one kind of logical operator per expression: give the inner `&&`, `||` or `??` group a named const (`const isActive = a && b;`)"
+note: >-
+  Style pass (his ask, 2026-10-29), the "clean way to separate conditions" the brief left open: an `&&`, `||` or `??`
+  whose operand is a group of a different one of those operators, directly, in parentheses, or under `!`
+  (`!(settings.isEnabled && isInteractive) || isOff`), names the inner group first. A run of one operator
+  (`a && b && c`) passes; comparisons are untouched. The fix never adds parentheses: Biome removes them.
+files:
+  - "plugins/**/*.ts"
+utils:
+  and-group:
+    pattern: $_LEFT && $_RIGHT
+  or-group:
+    pattern: $_LEFT || $_RIGHT
+  nullish-group:
+    pattern: $_LEFT ?? $_RIGHT
+  wrapped-not-and:
+    any:
+      - matches: or-group
+      - matches: nullish-group
+      - kind: parenthesized_expression
+        has:
+          any:
+            - matches: or-group
+            - matches: nullish-group
+      - kind: unary_expression
+        has:
+          kind: parenthesized_expression
+          has:
+            any:
+              - matches: or-group
+              - matches: nullish-group
+  wrapped-not-or:
+    any:
+      - matches: and-group
+      - matches: nullish-group
+      - kind: parenthesized_expression
+        has:
+          any:
+            - matches: and-group
+            - matches: nullish-group
+      - kind: unary_expression
+        has:
+          kind: parenthesized_expression
+          has:
+            any:
+              - matches: and-group
+              - matches: nullish-group
+  wrapped-not-nullish:
+    any:
+      - matches: and-group
+      - matches: or-group
+      - kind: parenthesized_expression
+        has:
+          any:
+            - matches: and-group
+            - matches: or-group
+      - kind: unary_expression
+        has:
+          kind: parenthesized_expression
+          has:
+            any:
+              - matches: and-group
+              - matches: or-group
+rule:
+  any:
+    - matches: and-group
+      has:
+        matches: wrapped-not-and
+    - matches: or-group
+      has:
+        matches: wrapped-not-or
+    - matches: nullish-group
+      has:
+        matches: wrapped-not-nullish

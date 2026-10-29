@@ -22,7 +22,12 @@ export function commitCountKey(sessionId: string): string {
 }
 
 function isCount(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  if (typeof value !== 'number') {
+    return false;
+  }
+  const isWhole = Number.isSafeInteger(value);
+  const isNonNegative = value >= 0;
+  return isWhole && isNonNegative;
 }
 
 // What a stored commit count holds. The store is shared with the world (the error-handling rules,

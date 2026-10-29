@@ -1,0 +1,20 @@
+id: promise-combinator-takes-a-name
+language: TypeScript
+severity: error
+message: "Promise.all, allSettled, any and race take a named array: build the array of promises as a const first"
+note: >-
+  Style pass (his ask, 2026-10-29): `await Promise.all(keys.map(async (key) => …))` mixes the array's construction,
+  its callbacks and the wait into one expression. Flagged: any argument that is not a plain name, so an inline
+  `.map(…)` chain and an inline array literal (`Promise.allSettled([a(), b()])`) both count; the report splits them.
+files:
+  - "plugins/**/*.ts"
+rule:
+  any:
+    - pattern: Promise.all($ARG)
+    - pattern: Promise.allSettled($ARG)
+    - pattern: Promise.any($ARG)
+    - pattern: Promise.race($ARG)
+constraints:
+  ARG:
+    not:
+      kind: identifier

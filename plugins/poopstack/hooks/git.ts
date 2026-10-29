@@ -8,7 +8,14 @@
 export type CommitKind = 'committed' | 'amended';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object') {
+    return false;
+  }
+  if (value === null) {
+    return false;
+  }
+  const isArray = Array.isArray(value);
+  return !isArray;
 }
 
 // A cherry-pick also makes a commit, but not one Claude composed; it is left out.
@@ -25,7 +32,9 @@ export function commitKind(result: unknown): CommitKind | null {
     return null;
   }
   const { kind } = commit;
-  if (kind === 'committed' || kind === 'amended') {
+  const isCommitted = kind === 'committed';
+  const isAmended = kind === 'amended';
+  if (isCommitted || isAmended) {
     return kind;
   }
   return null;

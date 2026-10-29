@@ -28,8 +28,8 @@ export function nextRandom(state: number): Draw {
   // The output: a last fold, read as unsigned, scaled into [0, 1).
   const roundTwoShifted = roundTwo >>> MULBERRY32.shiftC;
   const roundTwoFolded = roundTwo ^ roundTwoShifted;
-  const unsigned = roundTwoFolded >>> 0;
-  const value = unsigned / UINT32_RANGE;
+  const roundTwoAsNonNegative = roundTwoFolded >>> 0;
+  const value = roundTwoAsNonNegative / UINT32_RANGE;
   return { state: next, value };
 }
 
@@ -88,7 +88,9 @@ const BISECTION_STEPS = 60;
 // The constant whose long-run hit rate is `rate`, by bisection (prdRate rises with it).
 export function prdConstant(rate: number): number {
   // Written as a positive test so that NaN, which fails every comparison, is refused too.
-  const isInRange = rate >= MIN_RATE && rate <= 1;
+  const isAtLeastLowest = rate >= MIN_RATE;
+  const isAtMostOne = rate <= 1;
+  const isInRange = isAtLeastLowest && isAtMostOne;
   if (!isInRange) {
     throw new Error(
       `poopstack: an engagement rate must lie in [${String(MIN_RATE)}, 1], not ${String(rate)}`,
@@ -170,7 +172,9 @@ export function shuffle(
     const swapIndex = Math.floor(scaled);
     const held = order[i];
     const swapped = order[swapIndex];
-    if (held === undefined || swapped === undefined) {
+    const isHeldMissing = held === undefined;
+    const isSwappedMissing = swapped === undefined;
+    if (isHeldMissing || isSwappedMissing) {
       throw new Error('poopstack: the shuffle stepped outside its list');
     }
     order[i] = swapped;
@@ -200,7 +204,9 @@ export function drawPhrase(
   }
   // A refill that would open with the phrase just shown opens with its second phrase instead,
   // and the first goes to the end of the bag.
-  if (first === last && second !== undefined) {
+  const isRepeat = first === last;
+  const hasSecond = second !== undefined;
+  if (isRepeat && hasSecond) {
     return { phrase: second, bag: [...afterSecond, first], state: refill.state };
   }
   const rest = refill.order.slice(1);

@@ -26,7 +26,11 @@ function isEngagement(value: unknown): value is Engagement {
 
 export function readSettings(options: PluginOptions): Settings {
   const { enabled: isEnabled, preset, engagement } = options;
-  if (typeof isEnabled !== 'boolean' || !isPreset(preset) || !isEngagement(engagement)) {
+  const hasBooleanEnabled = typeof isEnabled === 'boolean';
+  const isKnownPreset = isPreset(preset);
+  const isKnownEngagement = isEngagement(engagement);
+  const isMatch = hasBooleanEnabled && isKnownPreset && isKnownEngagement;
+  if (!isMatch) {
     throw new Error(
       `poopstack: options do not match plugin.json's userConfig: ${JSON.stringify(options)}`,
     );
@@ -42,10 +46,14 @@ export function readSettings(options: PluginOptions): Settings {
 export function isOwnRow(row: ConfigRow, plugin: string, field: string): boolean {
   const owner = row.provider.plugin;
   const loadedPrefix = `${plugin}@`;
-  const isOwner = owner === plugin || owner.startsWith(loadedPrefix);
+  const isPlainName = owner === plugin;
+  const isLoadedName = owner.startsWith(loadedPrefix);
+  const isOwner = isPlainName || isLoadedName;
   const pluginKey = `${plugin}.${field}`;
   const ownerKey = `${owner}.${field}`;
-  const isFieldKey = row.key === pluginKey || row.key === ownerKey;
+  const isPluginKey = row.key === pluginKey;
+  const isOwnerKey = row.key === ownerKey;
+  const isFieldKey = isPluginKey || isOwnerKey;
   return isOwner && isFieldKey;
 }
 

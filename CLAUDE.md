@@ -47,8 +47,14 @@ He finds nested expressions and chained async calls hard to read, so the code ta
 operation per step, each step's value with a name that says what it holds:
 
 - Break a nested expression into named single steps (`hooks/pick.ts`'s `nextRandom` is the
-  model). A chain of one operator (`a + b + c`), a comparison or `&&`/`||`/`!` in a condition, a
-  template literal that formats a message, and a short callback to an array method stay whole.
+  model). A chain of one operator (`a + b + c`), a template literal that formats a message, and a
+  short callback to an array method stay whole.
+- Inside `&&` or `||`, a comparison or a `!` on anything but a plain name gets a named const
+  first (`const isStepText = props.word !== 'Working';`); a call may stay. Naming runs the operand
+  every time, so where the right side needs the left (a null check, then a read), split with an
+  early return instead. A lone comparison in a condition is one step.
+- A name says what it holds in words, never in a type's spelling (`roundTwoAsNonNegative`, not
+  `unsigned`).
 - Every `await` is its own statement: never inside a member access, a call's arguments, a
   condition, an operator or a template. A `$.state.get` result is named `<key>Read` (the
   engine's `StateRead`) before its `.value` is used.
@@ -58,6 +64,11 @@ operation per step, each step's value with a name that says what it holds:
   `kind` field (`Pairing` in `hooks/register.tsx`). TypeScript `enum` is unavailable
   (`erasableSyntaxOnly`).
 - No clarifying parentheses: Biome's formatter removes them (decision 81).
-- A hook passed to `on(...)` is written inside the call or declared at the top of the file; the
-  engine refuses one bound to a `const` inside `register`.
-- Not yet enforced by a gate; the rules that could enforce it are being measured.
+- A hook passed to `on(...)` is written inside the call, in `register` or in a top-level helper
+  that receives `on` (`hookCommands`, which keeps `register` under Biome's 75-line cap). The
+  engine refuses a hook passed by a name that is neither a top-level function nor an import from
+  the mod's own files.
+- Enforced at commit and push, over `hooks/` and `tests/`: six ast-grep rules
+  (`ast-grep-rules/`: await-as-own-step, one-operator-per-step, mixed-logic-takes-a-name,
+  logic-operands-take-names, call-args-no-arithmetic, promise-combinator-takes-a-name), ESLint's
+  `max-depth` at 2 and Biome's `noExcessiveNestedCallbacks` at 2.

@@ -213,6 +213,8 @@ export function isShownNow(word: string, preset: Preset): boolean {
 
 // `shown` counts the commit jokes this session showed before this one.
 export function commitLine(shown: number, preset: Preset): string {
-  const isSecondJoke = shown === 1 && preset !== 'discreet';
+  const isSecondShown = shown === 1;
+  const isDiscreet = preset === 'discreet';
+  const isSecondJoke = isSecondShown && !isDiscreet;
   return isSecondJoke ? COMMIT_SECOND : COMMIT_FIRST;
 }

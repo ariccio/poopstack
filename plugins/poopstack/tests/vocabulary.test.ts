@@ -44,7 +44,12 @@ const IRREGULAR_PAST = new Set([
 ]);
 
 function isPastWord(word: string | undefined): boolean {
-  return word !== undefined && (word.endsWith('ed') || IRREGULAR_PAST.has(word));
+  if (word === undefined) {
+    return false;
+  }
+  const isRegularPast = word.endsWith('ed');
+  const isIrregularPast = IRREGULAR_PAST.has(word);
+  return isRegularPast || isIrregularPast;
 }
 
 test('every line is plain ASCII within its column cap, with no ellipsis of its own', () => {
@@ -89,9 +94,11 @@ test('"brown" never appears in discreet', () => {
 test('a working line is a present participle; a done line reads before "for 42s"', () => {
   for (const entry of ENTRIES) {
     const [first, second] = entry.working.split(' ');
+    const isFirstParticiple = first?.endsWith('ing') === true;
+    const isSecondParticiple = second?.endsWith('ing') === true;
     expect({
       line: entry.working,
-      isParticiple: first?.endsWith('ing') === true || second?.endsWith('ing') === true,
+      isParticiple: isFirstParticiple || isSecondParticiple,
     }).toEqual({
       line: entry.working,
       isParticiple: true,
@@ -123,7 +130,9 @@ test('each preset includes the tamer ones, and discreet is about a third of the 
   const discreet = poolFor('discreet').length;
   const regular = poolFor('regular').length;
   const maximum = poolFor('maximum').length;
-  expect(discreet > 15 && discreet < regular && regular < maximum).toBe(true);
+  expect(discreet).toBeGreaterThan(15);
+  expect(discreet).toBeLessThan(regular);
+  expect(regular).toBeLessThan(maximum);
   expect(maximum).toBe(ENTRIES.length);
 });
 
@@ -141,7 +150,8 @@ test('his commit lines come in his order, and discreet keeps to the first', () =
 test('a closing word shows only where its preset would have joked it', () => {
   const tamest = ENTRIES.find((entry) => entry.tier === 'discreet');
   const wildest = ENTRIES.find((entry) => entry.tier === 'maximum');
-  expect(tamest !== undefined && wildest !== undefined).toBe(true);
+  expect(tamest).toBeDefined();
+  expect(wildest).toBeDefined();
   for (const preset of ['discreet', 'regular', 'maximum'] as const) {
     expect(isShownNow(tamest?.done ?? '', preset)).toBe(true);
     expect(isShownNow(wildest?.done ?? '', preset)).toBe(preset === 'maximum');
@@ -164,6 +174,7 @@ test('the closing label is drawn only where the line still fits', () => {
   const word = 'Took a bio break';
   const width = word.length + LINE_TAIL_COLUMNS + LABEL_GAP.length + FOOTER_LABEL.length;
   expect(labelFits(width, word, FOOTER_LABEL)).toBe(true);
-  expect(labelFits(width - 1, word, FOOTER_LABEL)).toBe(false);
+  const oneColumnShort = width - 1;
+  expect(labelFits(oneColumnShort, word, FOOTER_LABEL)).toBe(false);
   expect(labelFits(undefined, word, FOOTER_LABEL)).toBe(true);
 });

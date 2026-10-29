@@ -1,0 +1,53 @@
+id: logic-operands-take-names-tsx
+language: Tsx
+severity: error
+message: "inside `&&` or `||`, give a comparison or a `!` on a compound value a named const first (`const isWorking = word === 'Working';`); where the right side needs the left, use an early return"
+note: >-
+  The Tsx twin of logic-operands-take-names (ast-grep parses .tsx files as their own language, so a TypeScript rule never sees them).
+  Style pass (his page-6 row-5 pick drops exception (2), 2026-10-29 02:52:08; this rule is his answer of
+  04:23:11, "Sure, add the rule."): an `&&` or `||` whose operand is a comparison (=== !== == != < > <= >=
+  instanceof in), directly or in parentheses, or a `!` on anything but a plain name or member read
+  (`!isActive(settings)`), names that operand first. A call stays allowed as an operand, so a guard keeps its
+  order: `const isHeld = held !== null; if (isHeld && isAwaitingRow(held))`. Naming runs the operand every
+  time; where the right side needs the left, split with an early return (his words, 2026-10-29: "you can,
+  y'know, use control flow"). A lone comparison in a condition is one step and passes. The fix never adds
+  parentheses: Biome removes them.
+files:
+  - "plugins/**/*.tsx"
+utils:
+  comparison:
+    any:
+      - pattern: $_LEFT === $_RIGHT
+      - pattern: $_LEFT !== $_RIGHT
+      - pattern: $_LEFT == $_RIGHT
+      - pattern: $_LEFT != $_RIGHT
+      - pattern: $_LEFT < $_RIGHT
+      - pattern: $_LEFT > $_RIGHT
+      - pattern: $_LEFT <= $_RIGHT
+      - pattern: $_LEFT >= $_RIGHT
+      - pattern: $_LEFT instanceof $_RIGHT
+      - pattern: $_LEFT in $_RIGHT
+  compound-negation:
+    kind: unary_expression
+    regex: "^!"
+    not:
+      has:
+        any:
+          - kind: identifier
+          - kind: member_expression
+          - kind: this
+  unnamed-operand:
+    any:
+      - matches: comparison
+      - matches: compound-negation
+      - kind: parenthesized_expression
+        has:
+          any:
+            - matches: comparison
+            - matches: compound-negation
+rule:
+  any:
+    - pattern: $_LEFT && $_RIGHT
+    - pattern: $_LEFT || $_RIGHT
+  has:
+    matches: unnamed-operand

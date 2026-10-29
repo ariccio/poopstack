@@ -1,0 +1,126 @@
+id: one-operator-per-step-tsx
+language: Tsx
+severity: error
+message: "one arithmetic or bitwise operator per step: assign the inner operation to a named const, then use the name (a chain of one operator, `a + b + c`, is one step)"
+note: >-
+  The Tsx twin of one-operator-per-step (ast-grep parses .tsx files as their own language, so a TypeScript rule never sees them).
+  Style pass (his ask, 2026-10-29; his page-6 row-5 pick keeps exception (1)): `((t ^ (t >>> c)) >>> 0) / RANGE`
+  nests unnamed temporaries; break it into one operation per `const`. Covers + - * / % ** ^ & | << >> >>>
+  whose operand is a different one of those operations, or the same one in parentheses, and a compound
+  assignment (`x ^= a + b`) whose right side is one. A chain of one operator without parentheses
+  (`a + b + c`, `a * b * c`) passes. Comparisons, `&&`, `||`, `??` and `!` are logic-operands-take-names's
+  and mixed-logic-takes-a-name's. An operation hidden inside a call (`Math.imul(a ^ b, c) >>> 0`) is
+  call-args-no-arithmetic's. The fix never adds parentheses: Biome removes them.
+files:
+  - "plugins/**/*.tsx"
+utils:
+  arithmetic:
+    any:
+      - pattern: $_LEFT + $_RIGHT
+      - pattern: $_LEFT - $_RIGHT
+      - pattern: $_LEFT * $_RIGHT
+      - pattern: $_LEFT / $_RIGHT
+      - pattern: $_LEFT % $_RIGHT
+      - pattern: $_LEFT ** $_RIGHT
+      - pattern: $_LEFT ^ $_RIGHT
+      - pattern: $_LEFT & $_RIGHT
+      - pattern: $_LEFT | $_RIGHT
+      - pattern: $_LEFT << $_RIGHT
+      - pattern: $_LEFT >> $_RIGHT
+      - pattern: $_LEFT >>> $_RIGHT
+  wrapped-arithmetic:
+    kind: parenthesized_expression
+    has:
+      matches: arithmetic
+rule:
+  any:
+    - pattern: $_LEFT + $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT + $_INNER_RIGHT
+    - pattern: $_LEFT - $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT - $_INNER_RIGHT
+    - pattern: $_LEFT * $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT * $_INNER_RIGHT
+    - pattern: $_LEFT / $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT / $_INNER_RIGHT
+    - pattern: $_LEFT % $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT % $_INNER_RIGHT
+    - pattern: $_LEFT ** $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT ** $_INNER_RIGHT
+    - pattern: $_LEFT ^ $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT ^ $_INNER_RIGHT
+    - pattern: $_LEFT & $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT & $_INNER_RIGHT
+    - pattern: $_LEFT | $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT | $_INNER_RIGHT
+    - pattern: $_LEFT << $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT << $_INNER_RIGHT
+    - pattern: $_LEFT >> $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT >> $_INNER_RIGHT
+    - pattern: $_LEFT >>> $_RIGHT
+      has:
+        any:
+          - matches: wrapped-arithmetic
+          - matches: arithmetic
+            not:
+              pattern: $_INNER_LEFT >>> $_INNER_RIGHT
+    - kind: augmented_assignment_expression
+      has:
+        field: right
+        any:
+          - matches: arithmetic
+          - matches: wrapped-arithmetic

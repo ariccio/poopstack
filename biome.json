@@ -90,6 +90,9 @@
           }
         }
       },
+      "nursery": {
+        "noExcessiveNestedCallbacks": { "level": "error", "options": { "max": 2 } }
+      },
       "suspicious": {
         "noExplicitAny": "error",
         "noConsole": "error",
