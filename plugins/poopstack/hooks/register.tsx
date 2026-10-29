@@ -1,14 +1,23 @@
 import type {
+  CommandInfo,
   EngineInterface,
+  On,
   Register,
   RenderElement,
   RenderInput,
   RenderPropsOf,
   RenderSurface,
+  SessionAppendInput,
   TurnCompleteInput,
   TurnCompleteReason,
 } from 'claude-code';
-import { COMMIT_COUNT_PREFIX, commitCountKey, isStale, readCount } from './commits';
+import {
+  COMMIT_COUNT_PREFIX,
+  commitCountKey,
+  isStale,
+  readCount,
+  type StoredCount,
+} from './commits';
 import { commitKind } from './git';
 import {
   describeRate,
@@ -37,6 +46,10 @@ import {
 // Wiring only: each hook reads what it needs from `$` and hands it to the pure modules. Every
 // hook passes the event on unchanged when the mod is off, the session is not interactive, or the
 // input is not what it expects, and its `.catch` does the same.
+//
+// Style: one operation per step. Every `await` is its own statement, and a value read from
+// `$.state` is named `<key>Read` (the engine's `StateRead`: the value and its version) before its
+// value is used.
 
 const IS_OFF = { plugin: 'poopstack', key: 'isOff' } as const;
 const WAS_ENABLED = { plugin: 'poopstack', key: 'wasEnabled' } as const;
@@ -48,13 +61,13 @@ const COMMIT_MISSES = { plugin: 'poopstack', key: 'commitMisses' } as const;
 const OUTCOME_MISSES = { plugin: 'poopstack', key: 'outcomeMisses' } as const;
 const CLOSING_WORD = { plugin: 'poopstack', key: 'closingWord' } as const;
 
-// $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
-// typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
-// removed when this one is written.
 // Said when a stored commit count could not be read and was replaced (the store is shared with
 // the world: lane 2 of the error-handling rules). His pair then starts again at its first line.
 const COUNT_RESET =
   'p(oop)stack could not read a saved commit-joke count, so it started that count again.';
+// $.store, machine-wide: whether the first-run toast has been shown at the end of a turn he
+// typed. `firstRunShown`, the key of c938bc3, counted any turn (a cache nudge's included); it is
+// removed when this one is written.
 const FIRST_RUN = 'firstRunSeen';
 const FIRST_RUN_BEFORE = 'firstRunShown';
 
@@ -68,14 +81,27 @@ const constants = new Map<number, number>();
 
 // The main turn whose closing line is being paired (feature row 2): the phrase its spinner was
 // given, and two facts that arrive in either order, the uuid of its `turn_duration` row (the
-// line's requestId, FINDINGS 1) and why it ended. A reload mid-turn loses it, and that line
-// then keeps Claude Code's own word.
-type Pairing = {
-  readonly turnId: string;
-  readonly phrase: string | null;
-  uuid: string | null;
-  reason: TurnCompleteReason | null;
-};
+// line's requestId, FINDINGS 1) and why it ended. Each stage holds exactly the facts known so
+// far; once both are known the line is settled at once and the pairing ends, so no stage holds
+// both. A reload mid-turn loses it, and that line then keeps Claude Code's own word.
+type Pairing =
+  | {
+      readonly stage: 'waiting';
+      readonly turnId: string;
+      readonly phrase: string | null;
+    }
+  | {
+      readonly stage: 'row-seen';
+      readonly turnId: string;
+      readonly phrase: string | null;
+      readonly uuid: string;
+    }
+  | {
+      readonly stage: 'reason-known';
+      readonly turnId: string;
+      readonly phrase: string | null;
+      readonly reason: TurnCompleteReason;
+    };
 let pairing: Pairing | null = null;
 // Set when a main turn starts while the turn before it still waits for its `turn_duration` row:
 // a prompt typed during a turn starts the next one at once, and no row names its turn
@@ -95,6 +121,23 @@ let isStopped = false;
 // false" to the type checker, and to the lint rule built on it, though off may have arrived meanwhile.
 function isStoppedNow(): boolean {
   return isStopped;
+}
+
+// Whether the mod may joke in this session at all: enabled in /config, in an interactive session.
+// `/poopstack off` is read separately (`isOff`), since it needs an await.
+function isActive(settings: Settings): boolean {
+  return settings.isEnabled && isInteractive;
+}
+
+// The two negations, each a named step, for the checks that leave early.
+function isNotActive(settings: Settings): boolean {
+  const isOn = isActive(settings);
+  return !isOn;
+}
+
+function isNotStoppedNow(): boolean {
+  const isStoppedAtThisMoment = isStoppedNow();
+  return !isStoppedAtThisMoment;
 }
 
 // A queue runs its work one at a time: two Bash calls can end together, and each step awaits the
@@ -137,8 +180,20 @@ function constantFor(rate: number): number {
   return constant;
 }
 
+// The dice constant for main turns, and the one for matched lines (commits and outcomes).
+function turnConstant(settings: Settings): number {
+  const rate = turnRate(settings);
+  return constantFor(rate);
+}
+
+function matchedConstant(settings: Settings): number {
+  const rate = matchedRate(settings);
+  return constantFor(rate);
+}
+
 async function isOff($: EngineInterface): Promise<boolean> {
-  return (await $.state.get(IS_OFF)).value === true;
+  const isOffRead = await $.state.get(IS_OFF);
+  return isOffRead.value === true;
 }
 
 // --- the turn's phrase -------------------------------------------------------------------------
@@ -146,16 +201,22 @@ async function isOff($: EngineInterface): Promise<boolean> {
 // Rolls the dice for the next main turn and, on a hit, draws its phrase from the bag. The engine
 // samples the spinner's word before `turn.start` fires, so the choice is made a turn ahead.
 async function drawTurn($: EngineInterface, settings: Settings): Promise<void> {
-  const rng = need((await $.state.get(RNG)).value, 'rng');
-  const misses = need((await $.state.get(TURN_MISSES)).value, 'turnMisses');
+  const rngRead = await $.state.get(RNG);
+  const rng = need(rngRead.value, 'rng');
+  const turnMissesRead = await $.state.get(TURN_MISSES);
+  const misses = need(turnMissesRead.value, 'turnMisses');
   const dice = nextRandom(rng);
-  const result = roll(constantFor(turnRate(settings)), misses, dice.value);
+  const constant = turnConstant(settings);
+  const result = roll(constant, misses, dice.value);
   let { state } = dice;
   let phrase: string | null = null;
   if (result.isHit) {
-    const bag = need((await $.state.get(BAG)).value, 'bag');
-    const last = (await $.state.get(PHRASE)).value ?? null;
-    const pool = poolFor(settings.preset).map((entry) => entry.working);
+    const bagRead = await $.state.get(BAG);
+    const bag = need(bagRead.value, 'bag');
+    const phraseRead = await $.state.get(PHRASE);
+    const last = phraseRead.value ?? null;
+    const entries = poolFor(settings.preset);
+    const pool = entries.map((entry) => entry.working);
     const drawn = drawPhrase(bag, pool, last, state);
     await $.state.set(BAG, drawn.bag);
     phrase = drawn.phrase;
@@ -168,17 +229,23 @@ async function drawTurn($: EngineInterface, settings: Settings): Promise<void> {
 
 // The first load in a session seeds the generator and warm-starts both dice.
 async function ensureSession($: EngineInterface, settings: Settings): Promise<void> {
-  if ((await $.state.get(RNG)).value !== undefined) {
+  const rngRead = await $.state.get(RNG);
+  if (rngRead.value !== undefined) {
     return;
   }
-  const seed = (hashId(await $.session.id()) ^ (await $.clock.now())) >>> 0;
+  const sessionId = await $.session.id();
+  const now = await $.clock.now();
+  const sessionHash = hashId(sessionId);
+  const mixed = sessionHash ^ now;
+  const seed = mixed >>> 0;
   const turnDice = nextRandom(seed);
   const commitDice = nextRandom(turnDice.state);
-  await $.state.set(TURN_MISSES, warmMisses(constantFor(turnRate(settings)), turnDice.value));
-  await $.state.set(
-    COMMIT_MISSES,
-    warmMisses(constantFor(matchedRate(settings)), commitDice.value),
-  );
+  const turnConstantNow = turnConstant(settings);
+  const turnMisses = warmMisses(turnConstantNow, turnDice.value);
+  await $.state.set(TURN_MISSES, turnMisses);
+  const commitConstant = matchedConstant(settings);
+  const commitMisses = warmMisses(commitConstant, commitDice.value);
+  await $.state.set(COMMIT_MISSES, commitMisses);
   await $.state.set(BAG, []);
   await $.state.set(RNG, commitDice.state);
   await drawTurn($, settings);
@@ -188,12 +255,16 @@ async function ensureSession($: EngineInterface, settings: Settings): Promise<vo
 // earlier version of the mod meets this one with the generator set and these misses unset. This
 // is the only place they are set, for a new session too, so the interrupted-turn tests cover it.
 async function ensureOutcomeDice($: EngineInterface, settings: Settings): Promise<void> {
-  if ((await $.state.get(OUTCOME_MISSES)).value !== undefined) {
+  const outcomeMissesRead = await $.state.get(OUTCOME_MISSES);
+  if (outcomeMissesRead.value !== undefined) {
     return;
   }
-  const rng = need((await $.state.get(RNG)).value, 'rng');
+  const rngRead = await $.state.get(RNG);
+  const rng = need(rngRead.value, 'rng');
   const dice = nextRandom(rng);
-  await $.state.set(OUTCOME_MISSES, warmMisses(constantFor(matchedRate(settings)), dice.value));
+  const constant = matchedConstant(settings);
+  const misses = warmMisses(constant, dice.value);
+  await $.state.set(OUTCOME_MISSES, misses);
   await $.state.set(RNG, dice.state);
 }
 
@@ -208,8 +279,10 @@ async function ensureReady($: EngineInterface, settings: Settings): Promise<void
 
 // A /config change reloads the module; one that turns `enabled` back on clears a session's off.
 async function reconcileOff($: EngineInterface, settings: Settings): Promise<void> {
-  const wasEnabled = (await $.state.get(WAS_ENABLED)).value;
-  if (settings.isEnabled && wasEnabled === false) {
+  const wasEnabledRead = await $.state.get(WAS_ENABLED);
+  const wasEnabled = wasEnabledRead.value;
+  const wasTurnedOffBefore = wasEnabled === false;
+  if (settings.isEnabled && wasTurnedOffBefore) {
     await $.state.set(IS_OFF, false);
   }
   await $.state.set(WAS_ENABLED, settings.isEnabled);
@@ -223,19 +296,42 @@ async function spinnerPhrase(
   surface: RenderSurface,
   props: Readonly<RenderPropsOf['Spinner']>,
 ): Promise<string | null> {
-  if (!(settings.isEnabled && isInteractive) || props.message !== null) {
+  const hasEngineMessage = props.message !== null;
+  if (isNotActive(settings) || hasEngineMessage) {
     return null;
   }
   // Off the terminal the word is the step's own text; only the bare "Working" is replaced.
-  if (surface !== 'terminal' && props.word !== 'Working') {
+  const isOffTerminal = surface !== 'terminal';
+  const isStepText = props.word !== 'Working';
+  if (isOffTerminal && isStepText) {
     return null;
   }
-  if (await isOff($)) {
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
     return null;
   }
-  const phrase = (await $.state.get(PHRASE)).value ?? null;
-  const isStillShown = poolFor(settings.preset).some((entry) => entry.working === phrase);
-  return isStillShown && !isStoppedNow() ? phrase : null;
+  const phraseRead = await $.state.get(PHRASE);
+  const phrase = phraseRead.value ?? null;
+  const pool = poolFor(settings.preset);
+  const isStillShown = pool.some((entry) => entry.working === phrase);
+  if (!isStillShown || isStoppedNow()) {
+    return null;
+  }
+  return phrase;
+}
+
+// The spinner as the engine will draw it: with the turn's phrase as its word, or unchanged.
+async function spinnerInput(
+  $: EngineInterface,
+  settings: Settings,
+  e: RenderInput<'Spinner'>,
+): Promise<RenderInput<'Spinner'>> {
+  const phrase = await spinnerPhrase($, settings, e.surface, e.props);
+  if (phrase === null) {
+    return e;
+  }
+  const props = { ...e.props, word: phrase };
+  return { ...e, props };
 }
 
 // The word a closing line was given when its turn was paired, if the preset in force now may
@@ -245,14 +341,26 @@ async function spinnerPhrase(
 async function closingWord(
   $: EngineInterface,
   settings: Settings,
-  requestId: string,
-  isExpandedOrWaiting: boolean,
+  e: RenderInput<'TurnDuration'>,
 ): Promise<string | null> {
-  if (!(settings.isEnabled && isInteractive) || isExpandedOrWaiting || (await isOff($))) {
+  const isExpanded = e.props.isExpanded === true;
+  const isWaiting = e.props.waitingFor !== undefined;
+  const isExpandedOrWaiting = isExpanded || isWaiting;
+  if (isNotActive(settings) || isExpandedOrWaiting) {
     return null;
   }
-  const word = (await $.state.get({ ...CLOSING_WORD, id: requestId })).value;
-  return word !== undefined && isShownNow(word, settings.preset) && !isStoppedNow() ? word : null;
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
+    return null;
+  }
+  const closingWordRead = await $.state.get({ ...CLOSING_WORD, id: e.requestId });
+  const word = closingWordRead.value;
+  const isUnpaired = word === undefined;
+  if (isUnpaired || isStoppedNow()) {
+    return null;
+  }
+  const isAllowedNow = isShownNow(word, settings.preset);
+  return isAllowedNow ? word : null;
 }
 
 // Claude Code's own closing line, as drawn with the paired word, and the label after it (feature
@@ -268,15 +376,21 @@ function withLabel(
   preset: Preset,
 ): RenderElement {
   const label = footerLabel(word, preset);
-  if (label === null || !labelFits(e.viewport?.columns, word, label)) {
+  if (label === null) {
+    return drawn;
+  }
+  const columns = e.viewport?.columns;
+  const canFit = labelFits(columns, word, label);
+  if (!canFit) {
     return drawn;
   }
   const { Box, Text } = $.ui.resolve(e);
+  const labelText = `${LABEL_GAP}${label}`;
   return (
     <Box alignItems="flex-end">
       {drawn}
       <Box flexShrink={0}>
-        <Text dimColor>{`${LABEL_GAP}${label}`}</Text>
+        <Text dimColor>{labelText}</Text>
       </Box>
     </Box>
   );
@@ -285,40 +399,52 @@ function withLabel(
 // --- the commit line ---------------------------------------------------------------------------
 
 async function rollCommit($: EngineInterface, settings: Settings): Promise<boolean> {
-  if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
+  if (isNotActive(settings)) {
     return false;
   }
-  const rng = need((await $.state.get(RNG)).value, 'rng');
-  const misses = need((await $.state.get(COMMIT_MISSES)).value, 'commitMisses');
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
+    return false;
+  }
+  const rngRead = await $.state.get(RNG);
+  const rng = need(rngRead.value, 'rng');
+  const commitMissesRead = await $.state.get(COMMIT_MISSES);
+  const misses = need(commitMissesRead.value, 'commitMisses');
   const dice = nextRandom(rng);
-  const result = roll(constantFor(matchedRate(settings)), misses, dice.value);
+  const constant = matchedConstant(settings);
+  const result = roll(constant, misses, dice.value);
   await $.state.set(RNG, dice.state);
   await $.state.set(COMMIT_MISSES, result.misses);
   return result.isHit;
 }
 
 async function countAndShow($: EngineInterface, settings: Settings): Promise<void> {
-  const key = commitCountKey(await $.session.id());
-  const held = readCount(await $.store.get(key));
+  const sessionId = await $.session.id();
+  const key = commitCountKey(sessionId);
+  const stored = await $.store.get(key);
+  const held = readCount(stored);
   const shown = held.kind === 'count' ? held.count.shown : 0;
   const at = await $.clock.now();
   if (isStoppedNow()) {
     return;
   }
-  await $.store.set(key, { shown: shown + 1, at });
+  const shownNow = shown + 1;
+  await $.store.set(key, { shown: shownNow, at });
   if (isStoppedNow()) {
     return;
   }
   if (held.kind === 'malformed') {
     $.ui.toast(COUNT_RESET);
   }
-  $.ui.toast(commitLine(shown, settings.preset));
+  const line = commitLine(shown, settings.preset);
+  $.ui.toast(line);
 }
 
 // The commit line, after the Bash call's result: its dice on the turn queue (state only, quick),
 // then its count and toast on the count queue.
 async function commitJoke($: EngineInterface, settings: Settings): Promise<void> {
-  if (await serial(async () => rollCommit($, settings))) {
+  const isHit = await serial(async () => rollCommit($, settings));
+  if (isHit) {
     await serialCount(async () => countAndShow($, settings));
   }
 }
@@ -333,21 +459,36 @@ function afterTheCall($: EngineInterface, work: Promise<void>): void {
   });
 }
 
+// A Bash call's result, which the engine let through: a commit it made starts the commit line.
+function noticeCommit($: EngineInterface, settings: Settings, callResult: unknown): void {
+  const kind = commitKind(callResult);
+  if (kind === null) {
+    return;
+  }
+  const work = commitJoke($, settings);
+  afterTheCall($, work);
+}
+
 // --- the interrupted turn ----------------------------------------------------------------------
 
 // The outcome lines (interrupted, error) share one set of dice at the matched rate, in regular
 // and maximum only; false when the mod is off or the preset is discreet.
 async function rollOutcome($: EngineInterface, settings: Settings): Promise<boolean> {
-  if (!(settings.isEnabled && isInteractive) || settings.preset === 'discreet') {
+  const isDiscreet = settings.preset === 'discreet';
+  if (isNotActive(settings) || isDiscreet) {
     return false;
   }
-  if (await isOff($)) {
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
     return false;
   }
-  const rng = need((await $.state.get(RNG)).value, 'rng');
-  const misses = need((await $.state.get(OUTCOME_MISSES)).value, 'outcomeMisses');
+  const rngRead = await $.state.get(RNG);
+  const rng = need(rngRead.value, 'rng');
+  const outcomeMissesRead = await $.state.get(OUTCOME_MISSES);
+  const misses = need(outcomeMissesRead.value, 'outcomeMisses');
   const dice = nextRandom(rng);
-  const result = roll(constantFor(matchedRate(settings)), misses, dice.value);
+  const constant = matchedConstant(settings);
+  const result = roll(constant, misses, dice.value);
   await $.state.set(RNG, dice.state);
   await $.state.set(OUTCOME_MISSES, result.misses);
   return result.isHit;
@@ -356,7 +497,8 @@ async function rollOutcome($: EngineInterface, settings: Settings): Promise<bool
 // An interrupted turn draws no closing line (FINDINGS 13), so his line is a toast; Claude Code's
 // own interrupt row stays as it is.
 async function abortedJoke($: EngineInterface, settings: Settings): Promise<void> {
-  if ((await rollOutcome($, settings)) && !isStoppedNow()) {
+  const isHit = await rollOutcome($, settings);
+  if (isHit && isNotStoppedNow()) {
     $.ui.toast(ABORTED_LINE);
   }
 }
@@ -364,11 +506,17 @@ async function abortedJoke($: EngineInterface, settings: Settings): Promise<void
 // --- the first run on this machine -------------------------------------------------------------
 
 async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
-  if (isFirstRunChecked || !(settings.isEnabled && isInteractive) || (await isOff($))) {
+  if (isFirstRunChecked || isNotActive(settings)) {
+    return;
+  }
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
     return;
   }
   isFirstRunChecked = true;
-  if ((await $.store.get(FIRST_RUN)) === true || isStoppedNow()) {
+  const firstRunStored = await $.store.get(FIRST_RUN);
+  const isSeenBefore = firstRunStored === true;
+  if (isSeenBefore || isStoppedNow()) {
     return;
   }
   await $.store.set(FIRST_RUN, true);
@@ -379,9 +527,9 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
   if (isStoppedNow()) {
     return;
   }
-  $.ui.toast(
-    `Sanitized for your protection. Jokes on ${describeRate(turnRate(settings))}; /poop off stops them.`,
-  );
+  const rate = turnRate(settings);
+  const rateText = describeRate(rate);
+  $.ui.toast(`Sanitized for your protection. Jokes on ${rateText}; /poop off stops them.`);
 }
 
 // --- the closing line, paired with its turn (feature row 2) ------------------------------------
@@ -392,49 +540,72 @@ async function firstRun($: EngineInterface, settings: Settings): Promise<void> {
 async function pairedWord(
   $: EngineInterface,
   settings: Settings,
-  held: Readonly<Pairing>,
+  phrase: string | null,
   reason: TurnCompleteReason,
 ): Promise<string | null> {
   if (reason === 'error') {
-    return (await rollOutcome($, settings)) ? ERROR_WORD : null;
+    const isHit = await rollOutcome($, settings);
+    return isHit ? ERROR_WORD : null;
   }
-  if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
+  if (isNotActive(settings)) {
     return null;
   }
-  const done = doneFor(held.phrase, settings.preset);
-  if (done === null || reason === 'aborted') {
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
+    return null;
+  }
+  const done = doneFor(phrase, settings.preset);
+  if (done === null) {
+    return null;
+  }
+  if (reason === 'aborted') {
     return null;
   }
   return reason === 'refusal' ? REFUSED_WORD : done;
 }
 
-// Called when either fact arrives: the word is written once both are known. The line usually
-// draws after both (186 of 191 lines in the probe's logs); a line that drew first is redrawn by
-// the write, or, if the engine does not redraw it, keeps Claude Code's word.
-async function settleClosing($: EngineInterface, settings: Settings): Promise<void> {
-  const held = pairing;
-  if (held === null) {
-    return;
-  }
-  const { uuid, reason } = held;
-  if (uuid === null || reason === null) {
-    return;
-  }
+// Both facts are known: the pairing ends here, before any await, and the word is written. The
+// line usually draws after both (186 of 191 lines in the probe's logs); a line that drew first is
+// redrawn by the write, or, if the engine does not redraw it, keeps Claude Code's word.
+async function settleClosing(
+  $: EngineInterface,
+  settings: Settings,
+  phrase: string | null,
+  uuid: string,
+  reason: TurnCompleteReason,
+): Promise<void> {
   pairing = null;
-  const word = await pairedWord($, settings, held, reason);
+  const word = await pairedWord($, settings, phrase, reason);
   if (word !== null) {
     await $.state.set({ ...CLOSING_WORD, id: uuid }, word);
   }
 }
 
-async function startPairing($: EngineInterface, turnId: string): Promise<void> {
-  if (pairing !== null && pairing.uuid === null && pairing.reason !== 'aborted') {
-    ambiguousAfter = pairing.turnId;
+// Whether a turn still waits for the `turn_duration` row its closing line draws for. An
+// interrupted turn draws none (FINDINGS 13), so it waits for nothing.
+function isAwaitingRow(held: Pairing): boolean {
+  switch (held.stage) {
+    case 'waiting':
+      return true;
+    case 'row-seen':
+      return false;
+    case 'reason-known':
+      return held.reason !== 'aborted';
   }
-  const phrase = (await $.state.get(PHRASE)).value ?? null;
-  pairing = { turnId, phrase, uuid: null, reason: null };
 }
 
+async function startPairing($: EngineInterface, turnId: string): Promise<void> {
+  const held = pairing;
+  const isHeld = held !== null;
+  if (isHeld && isAwaitingRow(held)) {
+    ambiguousAfter = held.turnId;
+  }
+  const phraseRead = await $.state.get(PHRASE);
+  const phrase = phraseRead.value ?? null;
+  pairing = { stage: 'waiting', turnId, phrase };
+}
+
+// A main loop `turn_duration` row: the uuid its closing line draws for.
 async function noteDurationRow(
   $: EngineInterface,
   settings: Settings,
@@ -444,9 +615,45 @@ async function noteDurationRow(
     ambiguousAfter = null;
     return;
   }
-  if (pairing !== null && pairing.uuid === null) {
-    pairing.uuid = uuid;
-    await settleClosing($, settings);
+  const held = pairing;
+  if (held === null) {
+    return;
+  }
+  switch (held.stage) {
+    case 'waiting':
+      pairing = { stage: 'row-seen', turnId: held.turnId, phrase: held.phrase, uuid };
+      return;
+    case 'reason-known':
+      await settleClosing($, settings, held.phrase, uuid, held.reason);
+      return;
+    case 'row-seen':
+      // The turn already has its row; a second one before its end is not this line's.
+      return;
+  }
+}
+
+// The main turn ended: why it ended.
+async function noteTurnEnd(
+  $: EngineInterface,
+  settings: Settings,
+  turnId: string,
+  reason: TurnCompleteReason,
+): Promise<void> {
+  const held = pairing;
+  if (held === null) {
+    return;
+  }
+  if (held.turnId !== turnId) {
+    return;
+  }
+  switch (held.stage) {
+    case 'waiting':
+    case 'reason-known':
+      pairing = { stage: 'reason-known', turnId, phrase: held.phrase, reason };
+      return;
+    case 'row-seen':
+      await settleClosing($, settings, held.phrase, held.uuid, reason);
+      return;
   }
 }
 
@@ -459,42 +666,73 @@ async function endMainTurn(
 ): Promise<void> {
   const wasTyped = isTypedTurn;
   isTypedTurn = false;
-  if (e.reason === 'aborted') {
+  const isAborted = e.reason === 'aborted';
+  if (isAborted) {
     await abortedJoke($, settings);
   }
-  if (e.reason === 'aborted' && e.turnId === ambiguousAfter) {
+  const isAmbiguousTurn = e.turnId === ambiguousAfter;
+  if (isAborted && isAmbiguousTurn) {
     ambiguousAfter = null;
   }
-  if (pairing !== null && pairing.turnId === e.turnId) {
-    pairing.reason = e.reason;
-    await settleClosing($, settings);
-  }
+  await noteTurnEnd($, settings, e.turnId, e.reason);
   await drawTurn($, settings);
   if (wasTyped) {
     await firstRun($, settings);
   }
 }
 
+// One stored commit count, read and checked, beside its key.
+type KeyedCount = { readonly key: string; readonly held: StoredCount };
+
+async function readStoredCount($: EngineInterface, key: string): Promise<KeyedCount> {
+  const stored = await $.store.get(key);
+  const held = readCount(stored);
+  return { key, held };
+}
+
+// Which counts to remove: the ones that cannot be read, and the ones untouched past the bound.
+function countsToRemove(
+  counts: readonly KeyedCount[],
+  now: number,
+): { readonly malformed: readonly string[]; readonly stale: readonly string[] } {
+  const malformed: string[] = [];
+  const stale: string[] = [];
+  for (const { key, held } of counts) {
+    if (held.kind === 'malformed') {
+      malformed.push(key);
+    }
+    const isCountKind = held.kind === 'count';
+    if (isCountKind && isStale(held.count, now)) {
+      stale.push(key);
+    }
+  }
+  return { malformed, stale };
+}
+
 // Removes the commit counts of sessions untouched past the keep bound (hooks/commits.ts), and any
 // count it cannot read, saying so once: deleted, a malformed value cannot be met again.
 async function pruneCommitCounts($: EngineInterface, settings: Settings): Promise<void> {
-  if (!(settings.isEnabled && isInteractive) || (await isOff($))) {
+  if (isNotActive(settings)) {
+    return;
+  }
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
     return;
   }
   const now = await $.clock.now();
-  const keys = (await $.store.keys()).filter((key) => key.startsWith(COMMIT_COUNT_PREFIX));
-  const counts = await Promise.all(keys.map(async (key) => $.store.get(key)));
-  const held = counts.map((value) => readCount(value));
-  const malformed = keys.filter((_key, index) => held[index]?.kind === 'malformed');
-  const stale = keys.filter((_key, index) => {
-    const count = held[index];
-    return count?.kind === 'count' && isStale(count.count, now);
-  });
+  const storeKeys = await $.store.keys();
+  const countKeys = storeKeys.filter((key) => key.startsWith(COMMIT_COUNT_PREFIX));
+  const reads = countKeys.map(async (key) => readStoredCount($, key));
+  const counts = await Promise.all(reads);
+  const { malformed, stale } = countsToRemove(counts, now);
   if (isStoppedNow()) {
     return;
   }
-  await Promise.all([...malformed, ...stale].map(async (key) => $.store.delete(key)));
-  if (malformed.length > 0 && !isStoppedNow()) {
+  const toDelete = [...malformed, ...stale];
+  const deletions = toDelete.map(async (key) => $.store.delete(key));
+  await Promise.all(deletions);
+  const hasMalformed = malformed.length > 0;
+  if (hasMalformed && isNotStoppedNow()) {
     $.ui.toast(COUNT_RESET);
   }
 }
@@ -506,6 +744,16 @@ async function setUpSession($: EngineInterface, settings: Settings): Promise<voi
   await pruneCommitCounts($, settings);
 }
 
+// A main turn's start: the session's dice when a /clear left them unset, then its pairing.
+async function startMainTurn(
+  $: EngineInterface,
+  settings: Settings,
+  turnId: string,
+): Promise<void> {
+  await ensureReady($, settings);
+  await startPairing($, turnId);
+}
+
 // --- the command -------------------------------------------------------------------------------
 
 // A command's answer. `exitCode` reaches only a headless run whose whole prompt was the command
@@ -513,6 +761,7 @@ async function setUpSession($: EngineInterface, settings: Settings): Promise<voi
 // asked, or a failure inside the mod.
 type Answer = { readonly text: string; readonly exitCode?: number };
 const FAILED_EXIT = 1;
+const OFF_STATUS = 'Off. /poopstack on turns the jokes back on.';
 
 // Changes one of this plugin's /config rows; the engine reloads the module with the new value.
 // Null when the row now holds the value asked for; otherwise why not: refused, or saved as
@@ -531,7 +780,11 @@ async function setOption(
   if (outcome.deny !== undefined) {
     return outcome.deny;
   }
-  return outcome.value === value ? null : `it was saved as ${JSON.stringify(outcome.value)}`;
+  if (outcome.value === value) {
+    return null;
+  }
+  const savedValueText = JSON.stringify(outcome.value);
+  return `it was saved as ${savedValueText}`;
 }
 
 async function turnOff($: EngineInterface): Promise<Answer> {
@@ -550,14 +803,18 @@ async function turnOff($: EngineInterface): Promise<Answer> {
 async function turnOn($: EngineInterface, settings: Settings): Promise<Answer> {
   isStopped = false;
   await $.state.set(IS_OFF, false);
-  const problem = settings.isEnabled ? null : await setOption($, 'enabled', true);
-  if (problem !== null) {
-    return {
-      text: `Not turned on: the setting was not saved (${problem}).`,
-      exitCode: FAILED_EXIT,
-    };
+  if (!settings.isEnabled) {
+    const problem = await setOption($, 'enabled', true);
+    if (problem !== null) {
+      return {
+        text: `Not turned on: the setting was not saved (${problem}).`,
+        exitCode: FAILED_EXIT,
+      };
+    }
   }
-  return { text: `On. Jokes on ${describeRate(turnRate(settings))} (${settings.preset}).` };
+  const rate = turnRate(settings);
+  const rateText = describeRate(rate);
+  return { text: `On. Jokes on ${rateText} (${settings.preset}).` };
 }
 
 async function setPreset($: EngineInterface, settings: Settings, preset: Preset): Promise<Answer> {
@@ -565,21 +822,33 @@ async function setPreset($: EngineInterface, settings: Settings, preset: Preset)
   if (problem !== null) {
     return { text: `The preset stays ${settings.preset}: ${problem}.`, exitCode: FAILED_EXIT };
   }
-  const rate = describeRate(turnRate({ ...settings, preset }));
-  return { text: `Preset is now ${preset}: jokes on ${rate}.` };
+  const chosen = { ...settings, preset };
+  const rate = turnRate(chosen);
+  const rateText = describeRate(rate);
+  return { text: `Preset is now ${preset}: jokes on ${rateText}.` };
 }
 
 async function statusText($: EngineInterface, settings: Settings): Promise<string> {
-  if (!settings.isEnabled || (await isOff($))) {
-    return 'Off. /poopstack on turns the jokes back on.';
+  if (!settings.isEnabled) {
+    return OFF_STATUS;
   }
-  return `On · ${settings.preset} · jokes on ${describeRate(turnRate(settings))}.`;
+  const isOffForSession = await isOff($);
+  if (isOffForSession) {
+    return OFF_STATUS;
+  }
+  const rate = turnRate(settings);
+  const rateText = describeRate(rate);
+  return `On · ${settings.preset} · jokes on ${rateText}.`;
 }
 
 async function answer($: EngineInterface, settings: Settings, args: string): Promise<Answer> {
-  const verb = args.trim().toLowerCase();
-  if (verb === '' || verb === 'status') {
-    return { text: await statusText($, settings) };
+  const trimmed = args.trim();
+  const verb = trimmed.toLowerCase();
+  const isBare = verb === '';
+  const isStatus = verb === 'status';
+  if (isBare || isStatus) {
+    const text = await statusText($, settings);
+    return { text };
   }
   if (verb === 'off') {
     return turnOff($);
@@ -595,6 +864,14 @@ async function answer($: EngineInterface, settings: Settings, args: string): Pro
   };
 }
 
+// Whether a listed command is this plugin's own registration of `command`.
+function isOwnEntry(entry: CommandInfo, command: string, plugin: string): boolean {
+  const isSameName = entry.name === command;
+  const isFromPlugin = entry.source === 'plugin';
+  const isThisPlugin = entry.plugin === plugin;
+  return isSameName && isFromPlugin && isThisPlugin;
+}
+
 // The answer to one of the mod's own names, or null for a name another plugin holds.
 // Whether a name is this plugin's, read from the command list when the command runs. Names
 // registered during session.start are listed only after it ends (measured 2026-10-28: the list
@@ -603,10 +880,7 @@ async function answer($: EngineInterface, settings: Settings, args: string): Pro
 // for the commands' catch, which cannot wait for the list.
 async function isOwnCommand($: EngineInterface, command: string): Promise<boolean> {
   const listed = await $.command.list();
-  const isOwn = listed.some(
-    (entry) =>
-      entry.name === command && entry.source === 'plugin' && entry.plugin === $.plugin.name,
-  );
+  const isOwn = listed.some((entry) => isOwnEntry(entry, command, $.plugin.name));
   if (isOwn) {
     owned.add(command);
   } else {
@@ -615,16 +889,21 @@ async function isOwnCommand($: EngineInterface, command: string): Promise<boolea
   return isOwn;
 }
 
-async function answerOwn(
+// The body of each command hook: the mod's answer to its own name, or the event passed on to
+// the plugin that holds the name. The engine takes a hook only as a function written inside the
+// `on(...)` call or declared at the top of the file (the validator refused a `const` inside
+// `register`, 2026-10-29), so each of the five hooks spells out its call to this one.
+async function answerOrPass<E extends { readonly command: string; readonly args: string }, R>(
   $: EngineInterface,
   settings: Settings,
-  command: string,
-  args: string,
-): Promise<Answer | null> {
-  if (!(await isOwnCommand($, command))) {
-    return null;
+  e: E,
+  next: (e: E) => Promise<R>,
+): Promise<R | Answer> {
+  const isOwn = await isOwnCommand($, e.command);
+  if (!isOwn) {
+    return next(e);
   }
-  return await answer($, settings, args);
+  return answer($, settings, e.args);
 }
 
 const DESCRIPTION = 'p(oop)stack: on, off, discreet, regular, maximum, poopmaxxing, or status';
@@ -639,13 +918,21 @@ async function failedOrPass<E extends { readonly command: string }, R>(
   e: E,
   next: (e: E) => Promise<R>,
 ): Promise<R | Answer> {
-  return owned.has(e.command) ? { text: FAILED, exitCode: FAILED_EXIT } : next(e);
+  if (owned.has(e.command)) {
+    return { text: FAILED, exitCode: FAILED_EXIT };
+  }
+  return next(e);
+}
+
+// The catch of every other hook: whatever failed, the event goes on unchanged.
+async function passOn<E, R>(_$: unknown, e: E, next: (e: E) => Promise<R>): Promise<R> {
+  return next(e);
 }
 
 // Each visible name (decision 35) is registered by its literal name. A name the command list shows
 // held by another plugin, when the command runs, is left to its owner (`isOwnCommand`).
 async function registerCommands($: EngineInterface): Promise<void> {
-  await Promise.allSettled([
+  const registrations = [
     $.command.register({
       name: 'poopstack',
       description: DESCRIPTION,
@@ -676,7 +963,41 @@ async function registerCommands($: EngineInterface): Promise<void> {
       argumentHint: HINT,
       immediate: true,
     }),
-  ]);
+  ];
+  await Promise.allSettled(registrations);
+}
+
+// One hook per visible name, each matched by its literal name (the catch: `failedOrPass`). A
+// top-level helper that receives `on` keeps `register` under Biome's 75-line cap (decision 82);
+// the engine accepts hooks written inside the `on(...)` call here as in `register`.
+function hookCommands(on: On, settings: Settings): void {
+  on('command.run', { command: 'poopstack' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'poop' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'commode' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'porcelain' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+  on('command.run', { command: 'agentic-outhouse' }, async ($, e, next) =>
+    answerOrPass($, settings, e, next),
+  ).catch(failedOrPass);
+}
+
+// Whether an appended row is the main loop's `turn_duration` notice, the row a closing line
+// draws for. Each check leaves early, so `name` is read only on a system row.
+function isMainDurationRow(e: SessionAppendInput): boolean {
+  if (e.agentId !== undefined) {
+    return false;
+  }
+  if (e.message.type !== 'system') {
+    return false;
+  }
+  return e.message.name === 'turn_duration';
 }
 
 export const register: Register = (on, options) => {
@@ -688,29 +1009,25 @@ export const register: Register = (on, options) => {
     isInteractive = e.isInteractive;
     await serial(async () => setUpSession($, settings));
     return result;
-  }).catch(async (_$, e, next) => next(e));
+  }).catch(passOn);
 
   // An observer: notes the phrase a main turn starts with, for its closing line.
   on('turn.start', async ($, e, next) => {
     const result = await next(e);
     if (e.agentId === undefined) {
-      await serial(async () => {
-        await ensureReady($, settings);
-        await startPairing($, e.turnId);
-      });
+      await serial(async () => startMainTurn($, settings, e.turnId));
     }
     return result;
-  }).catch(async (_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+  }).catch(passOn); // `next` is replay-safe here: a settled call is not re-run
 
   // An observer: the main loop's `turn_duration` notice is the row its closing line draws for.
   on('session.append', { door: 'notice' }, async ($, e, next) => {
     const result = await next(e);
-    const isDuration = e.message.type === 'system' && e.message.name === 'turn_duration';
-    if (isDuration && e.agentId === undefined) {
+    if (isMainDurationRow(e)) {
       await serial(async () => noteDurationRow($, settings, e.uuid));
     }
     return result;
-  }).catch(async (_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+  }).catch(passOn); // `next` is replay-safe here: a settled call is not re-run
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
@@ -718,58 +1035,45 @@ export const register: Register = (on, options) => {
       await serial(async () => endMainTurn($, settings, e));
     }
     return result;
-  }).catch(async (_$, e, next) => next(e));
+  }).catch(passOn);
 
   // An observer: the prompt goes on unchanged; only where it came from is noted.
   on('prompt.submit', async (_$, e, next) => {
     const result = await next(e);
-    if (e.origin.kind === 'composer' && e.isMeta !== true) {
+    const isComposer = e.origin.kind === 'composer';
+    const isMeta = e.isMeta === true;
+    if (isComposer && !isMeta) {
       isTypedTurn = true;
     }
     return result;
-  }).catch(async (_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+  }).catch(passOn); // `next` is replay-safe here: a settled call is not re-run
 
   // An observer: the result returns unchanged, at once; the commit line follows (`afterTheCall`).
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e);
-    if (result.deny === undefined && commitKind(result.result) !== null) {
-      afterTheCall($, commitJoke($, settings));
+    if (result.deny === undefined) {
+      noticeCommit($, settings, result.result);
     }
     return result;
-  }).catch(async (_$, e, next) => next(e)); // `next` is replay-safe here: a settled call is not re-run
+  }).catch(passOn); // `next` is replay-safe here: a settled call is not re-run
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    const phrase = await spinnerPhrase($, settings, e.surface, e.props);
-    return phrase === null ? next(e) : next({ ...e, props: { ...e.props, word: phrase } });
-  }).catch(async (_$, e, next) => next(e));
+    const input = await spinnerInput($, settings, e);
+    return next(input);
+  }).catch(passOn);
 
   // A joked line keeps Claude Code's own text (its true duration and time) with the label after
   // it, left off where the measured width would wrap. The engine raises TurnDuration on the
   // terminal only (its types), so design item 10 needs no surface check here.
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
-    const isExpandedOrWaiting = e.props.isExpanded === true || e.props.waitingFor !== undefined;
-    const word = await closingWord($, settings, e.requestId, isExpandedOrWaiting);
+    const word = await closingWord($, settings, e);
     if (word === null) {
       return next(e);
     }
-    const drawn = await next({ ...e, props: { ...e.props, word } });
+    const props = { ...e.props, word };
+    const drawn = await next({ ...e, props });
     return withLabel($, e, drawn, word, settings.preset);
-  }).catch(async (_$, e, next) => next(e));
+  }).catch(passOn);
 
-  // One hook per visible name, each matched by its literal name (the catch: `failedOrPass`).
-  on('command.run', { command: 'poopstack' }, async ($, e, next) => {
-    return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(failedOrPass);
-  on('command.run', { command: 'poop' }, async ($, e, next) => {
-    return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(failedOrPass);
-  on('command.run', { command: 'commode' }, async ($, e, next) => {
-    return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(failedOrPass);
-  on('command.run', { command: 'porcelain' }, async ($, e, next) => {
-    return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(failedOrPass);
-  on('command.run', { command: 'agentic-outhouse' }, async ($, e, next) => {
-    return (await answerOwn($, settings, e.command, e.args)) ?? next(e);
-  }).catch(failedOrPass);
+  hookCommands(on, settings);
 };

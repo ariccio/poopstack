@@ -146,6 +146,10 @@ export default tseslint.config(
         },
       ],
       '@typescript-eslint/init-declarations': 'error',
+      // Block depth at 2, today's deepest (his page-6 row-3 pick, 2026-10-29): a third level is
+      // split into a helper or an early return. Biome has no block-depth rule; it owns the
+      // callback twin (noExcessiveNestedCallbacks, biome.json).
+      'max-depth': ['error', 2],
       '@typescript-eslint/no-loop-func': 'error',
       '@typescript-eslint/default-param-last': 'error',
       // A boolean's name says it is one (is, has, was, should, can, did, will, are), so a name never

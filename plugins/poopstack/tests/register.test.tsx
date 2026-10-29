@@ -136,12 +136,15 @@ function engine(
   const store = new Map<string, unknown>(Object.entries(stored));
   on('command.register', (_, e) => ({ value: { command: e.name } }));
   let hasStarted = false;
-  on('command.list', () => ({
-    value:
-      config.isListLagging === true && !hasStarted
+  on('command.list', () => {
+    const isLagging = config.isListLagging === true;
+    const isEmptyNow = isLagging && !hasStarted;
+    return {
+      value: isEmptyNow
         ? []
         : NAMES.map((name) => ({ name, description: '', source: 'plugin', plugin: holder(name) })),
-  }));
+    };
+  });
   on('command.run', () => ({ text: 'answered by the other plugin' }));
   on('config.list', () => {
     if (config.isListFailing === true) {
@@ -159,17 +162,22 @@ function engine(
   });
   on('session.id', () => ({ value: 'session-1' }));
   on('store.get', async (_, e) => {
-    if (config.countReadGate !== undefined && e.key.startsWith('commitJokes.')) {
-      config.countReadGate.entered();
-      await config.countReadGate.released;
+    const isCountKey = e.key.startsWith('commitJokes.');
+    const countGate = isCountKey ? config.countReadGate : undefined;
+    if (countGate !== undefined) {
+      countGate.entered();
+      await countGate.released;
     }
-    const isCount = e.key.startsWith('commitJokes.') && 'countReadsAs' in config;
+    const hasCountReadsAs = 'countReadsAs' in config;
+    const isCount = isCountKey && hasCountReadsAs;
     return { value: isCount ? config.countReadsAs : store.get(e.key) };
   });
   on('store.set', async (_, e) => {
-    if (config.firstRunSetGate !== undefined && e.key === 'firstRunSeen') {
-      config.firstRunSetGate.entered();
-      await config.firstRunSetGate.released;
+    const isFirstRunKey = e.key === 'firstRunSeen';
+    const firstRunGate = isFirstRunKey ? config.firstRunSetGate : undefined;
+    if (firstRunGate !== undefined) {
+      firstRunGate.entered();
+      await firstRunGate.released;
     }
     if (config.isStoreSetFailing === true) {
       throw new Error('the store failed');
@@ -201,10 +209,11 @@ function engine(
   });
   on('ui.render', { component: 'TurnDuration' }, ($, e) => {
     const { Box, Text } = $.ui.resolve(e);
+    const seconds = e.props.durationMs / 1000;
     return (
       <Box>
         <Text>{e.props.word}</Text>
-        <Text>{` for ${String(e.props.durationMs / 1000)}s · done 3:40 PM`}</Text>
+        <Text>{` for ${String(seconds)}s · done 3:40 PM`}</Text>
       </Box>
     );
   });
@@ -240,7 +249,8 @@ async function spinnerWord(
   message: string | null,
 ): Promise<string | undefined> {
   const ui = await $.ui.mount({ ...SPINNER, surface, props: { ...SPINNER.props, word, message } });
-  const text = (await ui.find({ type: 'Text' }))?.text;
+  const found = await ui.find({ type: 'Text' });
+  const text = found?.text;
   await ui.unmount();
   return text;
 }
@@ -251,31 +261,36 @@ test(
   async ($, on) => {
     engine(on);
     await start($);
-    expect(WORKING.has((await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '')).toBe(true);
+    const shown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    expect(WORKING.has(shown ?? '')).toBe(true);
   },
 );
 
 test('the engine status message is never replaced', { options: ALWAYS }, async ($, on) => {
   engine(on);
   await start($);
-  expect(await spinnerWord($, 'terminal', 'Pollinating', 'Compacting conversation')).toBe(
-    'Pollinating',
-  );
+  const shown = await spinnerWord($, 'terminal', 'Pollinating', 'Compacting conversation');
+  expect(shown).toBe('Pollinating');
 });
 
 test('off the terminal only the bare "Working" is replaced', { options: ALWAYS }, async ($, on) => {
   engine(on);
   await start($);
-  expect(await spinnerWord($, 'desktop', 'Creating notes.md', null)).toBe('Creating notes.md');
-  expect(WORKING.has((await spinnerWord($, 'desktop', 'Working', null)) ?? '')).toBe(true);
-  expect(await spinnerWord($, 'vscode', 'Creating notes.md', null)).toBe('Creating notes.md');
-  expect(WORKING.has((await spinnerWord($, 'vscode', 'Working', null)) ?? '')).toBe(true);
+  const desktopStep = await spinnerWord($, 'desktop', 'Creating notes.md', null);
+  expect(desktopStep).toBe('Creating notes.md');
+  const desktopWorking = await spinnerWord($, 'desktop', 'Working', null);
+  expect(WORKING.has(desktopWorking ?? '')).toBe(true);
+  const vscodeStep = await spinnerWord($, 'vscode', 'Creating notes.md', null);
+  expect(vscodeStep).toBe('Creating notes.md');
+  const vscodeWorking = await spinnerWord($, 'vscode', 'Working', null);
+  expect(WORKING.has(vscodeWorking ?? '')).toBe(true);
 });
 
 test('a session that is not interactive is left alone', { options: ALWAYS }, async ($, on) => {
   engine(on);
   await start($, false);
-  expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
+  const shown = await spinnerWord($, 'terminal', 'Pollinating', null);
+  expect(shown).toBe('Pollinating');
 });
 
 test(
@@ -284,7 +299,8 @@ test(
   async ($, on) => {
     engine(on);
     await start($);
-    expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
+    const shown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    expect(shown).toBe('Pollinating');
   },
 );
 
@@ -297,7 +313,8 @@ test(
     const result = await $.command.run(run('poop', 'off'));
     expect(textOf(result).startsWith('Off.')).toBe(true);
     expect(seen.configSets).toEqual(['poopstack.enabled=false']);
-    expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
+    const shown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    expect(shown).toBe('Pollinating');
   },
 );
 
@@ -351,7 +368,8 @@ async function turnWithRow(
 async function closingText($: Engine, requestId: string, extra: object = {}): Promise<string> {
   const props = { ...CLOSING.props, ...extra };
   const ui = await $.ui.mount({ ...CLOSING, surface: 'terminal', requestId, props });
-  const text = (await ui.find({ type: 'Text' }))?.text ?? '';
+  const found = await ui.find({ type: 'Text' });
+  const text = found?.text ?? '';
   await ui.unmount();
   return text;
 }
@@ -362,19 +380,24 @@ test(
   async ($, on) => {
     engine(on);
     await start($);
-    const first = (await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '';
+    const firstShown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    const first = firstShown ?? '';
     await turnWithRow($, 'turn-1', 'row-1', 'answer');
-    const second = (await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '';
+    const secondShown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    const second = secondShown ?? '';
     await turnWithRow($, 'turn-2', 'row-2', 'answer', false);
     const ui = await $.ui.mount({ ...CLOSING, surface: 'terminal', requestId: 'row-1' });
-    const shown = (await ui.find({ type: 'Text' }))?.text;
+    const shownFound = await ui.find({ type: 'Text' });
+    const shown = shownFound?.text;
     await ui.redraw();
-    const again = (await ui.find({ type: 'Text' }))?.text;
+    const againFound = await ui.find({ type: 'Text' });
+    const again = againFound?.text;
     await ui.unmount();
     expect(DONE.has(shown ?? '')).toBe(true);
     expect(shown).toBe(DONE_OF.get(first));
     expect(again).toBe(shown);
-    expect(await closingText($, 'row-2')).toBe(DONE_OF.get(second) ?? '');
+    const secondClosing = await closingText($, 'row-2');
+    expect(secondClosing).toBe(DONE_OF.get(second) ?? '');
   },
 );
 
@@ -382,7 +405,8 @@ test(
 async function closingTexts($: Engine, requestId: string, columns?: number): Promise<string[]> {
   const viewport = columns === undefined ? {} : { viewport: { columns, rows: 24 } };
   const ui = await $.ui.mount({ ...CLOSING, surface: 'terminal', requestId, ...viewport });
-  const texts = (await ui.findAll({ type: 'Text' })).map((found) => found.text);
+  const allFound = await ui.findAll({ type: 'Text' });
+  const texts = allFound.map((found) => found.text);
   await ui.unmount();
   return texts;
 }
@@ -398,7 +422,8 @@ test(
     expect(DONE.has(word ?? '')).toBe(true);
     expect(tail).toBe(TAIL);
     expect(label).toBe(`${LABEL_GAP}${FOOTER_LABEL}`);
-    expect(await closingTexts($, 'row-unknown')).toEqual(['Brewed', TAIL]);
+    const unpairedTexts = await closingTexts($, 'row-unknown');
+    expect(unpairedTexts).toEqual(['Brewed', TAIL]);
   },
 );
 
@@ -409,11 +434,8 @@ test(
     engine(on);
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'answer');
-    expect(await closingTexts($, 'row-1')).toEqual([
-      expect.any(String),
-      TAIL,
-      `${LABEL_GAP}${FOOTER_LABEL_DISCREET}`,
-    ]);
+    const texts = await closingTexts($, 'row-1');
+    expect(texts).toEqual([expect.any(String), TAIL, `${LABEL_GAP}${FOOTER_LABEL_DISCREET}`]);
   },
 );
 
@@ -421,8 +443,10 @@ test('the label is left off where it would wrap the line', { options: ALWAYS }, 
   engine(on);
   await start($);
   await turnWithRow($, 'turn-1', 'row-1', 'answer');
-  expect((await closingTexts($, 'row-1', 200)).length).toBe(3);
-  expect((await closingTexts($, 'row-1', 40)).length).toBe(2);
+  const wideTexts = await closingTexts($, 'row-1', 200);
+  expect(wideTexts.length).toBe(3);
+  const narrowTexts = await closingTexts($, 'row-1', 40);
+  expect(narrowTexts.length).toBe(2);
 });
 
 test(
@@ -431,7 +455,8 @@ test(
   async ($, on) => {
     engine(on);
     await start($);
-    expect(await closingText($, 'row-unknown')).toBe('Brewed');
+    const word = await closingText($, 'row-unknown');
+    expect(word).toBe('Brewed');
   },
 );
 
@@ -439,14 +464,16 @@ test('a refused turn says only "Refused"', { options: ALWAYS }, async ($, on) =>
   engine(on);
   await start($);
   await turnWithRow($, 'turn-1', 'row-1', 'refusal');
-  expect(await closingTexts($, 'row-1')).toEqual([REFUSED_WORD, TAIL]);
+  const texts = await closingTexts($, 'row-1');
+  expect(texts).toEqual([REFUSED_WORD, TAIL]);
 });
 
 test('an error turn shows his error line', { options: ALWAYS }, async ($, on) => {
   engine(on);
   await start($);
   await turnWithRow($, 'turn-1', 'row-1', 'error');
-  expect(await closingText($, 'row-1')).toBe(ERROR_WORD);
+  const word = await closingText($, 'row-1');
+  expect(word).toBe(ERROR_WORD);
 });
 
 test(
@@ -456,7 +483,8 @@ test(
     engine(on);
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'error');
-    expect(await closingText($, 'row-1')).toBe('Brewed');
+    const word = await closingText($, 'row-1');
+    expect(word).toBe('Brewed');
   },
 );
 
@@ -467,7 +495,8 @@ test(
     engine(on);
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'aborted');
-    expect(await closingText($, 'row-1')).toBe('Brewed');
+    const word = await closingText($, 'row-1');
+    expect(word).toBe('Brewed');
   },
 );
 
@@ -478,10 +507,13 @@ test(
     engine(on);
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'answer');
-    expect(await closingText($, 'row-1', { isExpanded: true })).toBe('Brewed');
+    const expandedWord = await closingText($, 'row-1', { isExpanded: true });
+    expect(expandedWord).toBe('Brewed');
     const waiting = { waitingFor: { agents: [], workflows: 0 } };
-    expect(await closingText($, 'row-1', waiting)).toBe('Brewed');
-    expect(DONE.has(await closingText($, 'row-1'))).toBe(true);
+    const waitingWord = await closingText($, 'row-1', waiting);
+    expect(waitingWord).toBe('Brewed');
+    const plainWord = await closingText($, 'row-1');
+    expect(DONE.has(plainWord)).toBe(true);
   },
 );
 
@@ -493,7 +525,8 @@ test(
     await start($);
     await turnWithRow($, 'turn-1', 'row-1', 'answer');
     await $.command.run(run('poop', 'off'));
-    expect(await closingText($, 'row-1')).toBe('Brewed');
+    const word = await closingText($, 'row-1');
+    expect(word).toBe('Brewed');
   },
 );
 
@@ -695,9 +728,8 @@ test(
       return answers[sent.indexOf(command)] ?? NOTHING;
     });
     await start($);
-    const returned = await Promise.all(
-      sent.map(async (command) => $.tool.call({ tool: 'Bash', command })),
-    );
+    const pendingCalls = sent.map(async (command) => $.tool.call({ tool: 'Bash', command }));
+    const returned = await Promise.all(pendingCalls);
     expect(returned).toEqual([...answers]);
     expect([...received].sort()).toEqual(sent);
   },
@@ -736,9 +768,8 @@ test(
     });
     await start($);
     await $.command.run(run('poop', 'off'));
-    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
-      COMMITTED,
-    );
+    const callResult = await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    expect(callResult).toEqual(COMMITTED);
     await seen.clock.settle();
     expect(calls).toBe(1);
     expect(seen.toasts).toEqual([]);
@@ -807,9 +838,8 @@ test(
       return COMMITTED;
     });
     await start($);
-    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
-      COMMITTED,
-    );
+    const callResult = await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    expect(callResult).toEqual(COMMITTED);
     await seen.clock.settle();
     expect(calls).toBe(1);
     expect(seen.toasts).toEqual([]);
@@ -828,7 +858,8 @@ test(
     expect(textOf(result).startsWith('Jokes stopped for this session only')).toBe(true);
     expect(textOf(result).includes('it was saved as true')).toBe(true);
     expect(result.exitCode).toBe(1);
-    expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
+    const shown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    expect(shown).toBe('Pollinating');
   },
 );
 
@@ -928,7 +959,8 @@ test(
     await $.command.run(run('poop', 'off'));
     released.open();
     await seen.clock.settle();
-    expect(await call).toEqual(COMMITTED);
+    const callResult = await call;
+    expect(callResult).toEqual(COMMITTED);
     expect(seen.configSets).toEqual(['poopstack.enabled=false']);
     expect(seen.storeSets).toEqual([]);
     expect(seen.toasts).toEqual([]);
@@ -942,10 +974,11 @@ test(
     const seen = engine(on);
     on('tool.call', () => COMMITTED);
     await start($);
-    await Promise.all([
+    const bothCommits = [
       $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' }),
       $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: y"' }),
-    ]);
+    ];
+    await Promise.all(bothCommits);
     await seen.clock.settle();
     expect(seen.toasts).toEqual([COMMIT_FIRST, COMMIT_SECOND]);
   },
@@ -967,13 +1000,16 @@ test(
       ({ ...TURN_BASE, turnId, isAborted: false, reason: 'answer' }) as const;
     await $.turn.start({ text: 'go', turnId: 'turn-a' });
     await $.turn.complete(end('turn-a'));
-    const second = (await spinnerWord($, 'terminal', 'Pollinating', null)) ?? '';
+    const secondShown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    const second = secondShown ?? '';
     await $.turn.start({ text: 'typed during turn a', turnId: 'turn-b' });
     await $.session.append(rowOf('row-a'));
     await $.session.append(rowOf('row-b'));
     await $.turn.complete(end('turn-b'));
-    expect(await closingText($, 'row-a')).toBe('Brewed');
-    expect(await closingText($, 'row-b')).toBe(DONE_OF.get(second) ?? '');
+    const rowAWord = await closingText($, 'row-a');
+    expect(rowAWord).toBe('Brewed');
+    const rowBWord = await closingText($, 'row-b');
+    expect(rowBWord).toBe(DONE_OF.get(second) ?? '');
   },
 );
 
@@ -987,9 +1023,8 @@ test(
     const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { countReadGate });
     on('tool.call', () => COMMITTED);
     await start($);
-    expect(await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' })).toEqual(
-      COMMITTED,
-    );
+    const callResult = await $.tool.call({ tool: 'Bash', command: 'git commit -m "feat: x"' });
+    expect(callResult).toEqual(COMMITTED);
     await entered.promise;
     expect(seen.toasts).toEqual([]);
     released.open();
@@ -1057,7 +1092,8 @@ test(
       uuid: 'row-b',
     });
     await $.turn.complete(end('turn-b', 'answer'));
-    expect(DONE.has(await closingText($, 'row-b'))).toBe(true);
+    const rowBWord = await closingText($, 'row-b');
+    expect(DONE.has(rowBWord)).toBe(true);
   },
 );
 
@@ -1085,7 +1121,8 @@ test(
     expect(textOf(result).includes('no /config row for poopstack.enabled')).toBe(true);
     expect(result.exitCode).toBe(1);
     expect(seen.configSets).toEqual([]);
-    expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
+    const shown = await spinnerWord($, 'terminal', 'Pollinating', null);
+    expect(shown).toBe('Pollinating');
   },
 );
 

@@ -1,0 +1,30 @@
+id: await-as-own-step
+language: TypeScript
+severity: error
+message: "an await is its own step: give its result a name (`const held = await …;`), or make it the whole statement or the whole return"
+note: >-
+  Style pass (his ask, 2026-10-29): an await never sits inside a larger expression, not as a member access, a call
+  argument, a condition, an operand or a template part. Allowed: `await f();`, `const x = await f();`,
+  `x = await f();` as a whole statement, `return await f();`, and an arrow function whose whole body is the await
+  (the arrow spelling of a return). Flagged as well, by the strict reading: `if (await f())` (an await that is the
+  whole condition) and `x += await f()` (an await as an operand of a compound assignment). An await on the right of
+  `||`, `&&` or `??`, or in a ternary branch, runs only on some paths: naming it first would run it on every path, so
+  its fix is an early return, not a hoisted const. The fix never adds parentheses: Biome removes them.
+files:
+  - "plugins/**/*.ts"
+rule:
+  kind: await_expression
+  not:
+    any:
+      - inside:
+          kind: expression_statement
+      - inside:
+          kind: variable_declarator
+      - inside:
+          kind: return_statement
+      - inside:
+          kind: arrow_function
+      - inside:
+          kind: assignment_expression
+          inside:
+            kind: expression_statement

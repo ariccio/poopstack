@@ -1,0 +1,37 @@
+id: call-args-no-arithmetic-tsx
+language: Tsx
+severity: error
+message: "a call's argument is a name, not an arithmetic or bitwise operation: assign the operation to a named const first"
+note: >-
+  The Tsx twin of call-args-no-arithmetic (ast-grep parses .tsx files as their own language, so a TypeScript rule never sees them).
+  Style pass (his ask, 2026-10-29), the narrow reading of "a call's arguments are names": `Math.floor(draw.value * (i + 1))`,
+  `Math.min(1, constant * rollNumber)` and `Math.imul(hash ^ code, PRIME)` pass an unnamed temporary. Covers the
+  operators of one-operator-per-step (+ - * / % ** ^ & | << >> >>>), parenthesized or not, as a direct argument of a
+  call. A nested call, a ternary, a template or an await as an argument is call-args-are-simple's broader reading.
+files:
+  - "plugins/**/*.tsx"
+utils:
+  arithmetic:
+    any:
+      - pattern: $_LEFT + $_RIGHT
+      - pattern: $_LEFT - $_RIGHT
+      - pattern: $_LEFT * $_RIGHT
+      - pattern: $_LEFT / $_RIGHT
+      - pattern: $_LEFT % $_RIGHT
+      - pattern: $_LEFT ** $_RIGHT
+      - pattern: $_LEFT ^ $_RIGHT
+      - pattern: $_LEFT & $_RIGHT
+      - pattern: $_LEFT | $_RIGHT
+      - pattern: $_LEFT << $_RIGHT
+      - pattern: $_LEFT >> $_RIGHT
+      - pattern: $_LEFT >>> $_RIGHT
+rule:
+  any:
+    - matches: arithmetic
+    - kind: parenthesized_expression
+      has:
+        matches: arithmetic
+  inside:
+    kind: arguments
+    inside:
+      kind: call_expression

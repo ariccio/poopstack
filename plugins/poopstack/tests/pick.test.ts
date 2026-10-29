@@ -17,7 +17,8 @@ test('the generator repeats from the same seed and stays in [0, 1)', () => {
     const x = nextRandom(a);
     const y = nextRandom(b);
     expect(x.value).toBe(y.value);
-    expect(x.value >= 0 && x.value < 1).toBe(true);
+    expect(x.value).toBeGreaterThanOrEqual(0);
+    expect(x.value).toBeLessThan(1);
     a = x.state;
     b = y.state;
   }
@@ -31,7 +32,10 @@ test('an id hashes to the same number every time, and different ids differ', () 
 test('each preset rate is met in the long run, within a percentage point', () => {
   for (const rate of [1 / 10, 1 / 5, 1 / 3, 2 / 3]) {
     const constant = prdConstant(rate);
-    expect(Math.abs(prdRate(constant) - rate) < 1e-6).toBe(true);
+    const longRunRate = prdRate(constant);
+    const rateError = longRunRate - rate;
+    const rateErrorSize = Math.abs(rateError);
+    expect(rateErrorSize).toBeLessThan(1e-6);
     let state = 7;
     let misses = 0;
     let hits = 0;
@@ -43,7 +47,10 @@ test('each preset rate is met in the long run, within a percentage point', () =>
       misses = result.misses;
       hits += result.isHit ? 1 : 0;
     }
-    expect(Math.abs(hits / rolls - rate) < 0.01).toBe(true);
+    const hitRate = hits / rolls;
+    const hitRateError = hitRate - rate;
+    const hitRateErrorSize = Math.abs(hitRateError);
+    expect(hitRateErrorSize).toBeLessThan(0.01);
   }
 });
 
@@ -58,16 +65,23 @@ test('a rate outside [0.01, 1] is refused loudly', () => {
 });
 
 test('the dice never go a whole horizon without a hit', () => {
-  const constant = prdConstant(1 / 10);
-  const longest = Math.ceil(1 / constant);
-  expect(roll(constant, longest - 1, 0.999_999).isHit).toBe(true);
+  const oneInTen = 1 / 10;
+  const constant = prdConstant(oneInTen);
+  const horizonExact = 1 / constant;
+  const longest = Math.ceil(horizonExact);
+  const missesBeforeLongest = longest - 1;
+  expect(roll(constant, missesBeforeLongest, 0.999_999).isHit).toBe(true);
 });
 
 test('a warm start lies inside the dice horizon', () => {
-  const constant = prdConstant(1 / 5);
+  const oneInFive = 1 / 5;
+  const constant = prdConstant(oneInFive);
+  const horizonExact = 1 / constant;
+  const horizon = Math.ceil(horizonExact);
   for (const u of [0, 0.25, 0.5, 0.75, 0.999_999]) {
     const misses = warmMisses(constant, u);
-    expect(misses >= 0 && misses < Math.ceil(1 / constant)).toBe(true);
+    expect(misses).toBeGreaterThanOrEqual(0);
+    expect(misses).toBeLessThan(horizon);
   }
 });
 

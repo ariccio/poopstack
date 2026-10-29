@@ -35,7 +35,9 @@ test('poopmaxxing is maximum on every turn, unless a joke rate is set', () => {
   const settings = { isEnabled: true, preset: 'poopmaxxing', engagement: 'by-preset' } as const;
   expect(turnRate(settings)).toBe(1);
   expect(matchedRate(settings)).toBe(1);
-  expect(turnRate({ ...settings, engagement: 'rare' })).toBe(1 / 10);
-  expect(turnRate({ ...settings, preset: 'maximum' })).toBe(1 / 3);
+  const oneInTen = 1 / 10;
+  const oneInThree = 1 / 3;
+  expect(turnRate({ ...settings, engagement: 'rare' })).toBe(oneInTen);
+  expect(turnRate({ ...settings, preset: 'maximum' })).toBe(oneInThree);
   expect(poolFor('poopmaxxing')).toEqual(poolFor('maximum'));
 });
