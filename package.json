@@ -13,6 +13,7 @@
     "fix": "biome check --write .",
     "check:ast": "ast-grep scan",
     "typecheck": "tsc -p plugins/poopstack",
+    "lint:types": "eslint --max-warnings 0 plugins/poopstack",
     "test:scripts": "zsh scripts/git/validate-commit-message.test.zsh && zsh scripts/git/git-improvements.test.zsh",
     "plugin:validate": "zsh scripts/quality/claude-plugin.zsh validate",
     "plugin:test": "zsh scripts/quality/claude-plugin.zsh test",
@@ -31,7 +32,9 @@
   "devDependencies": {
     "@ast-grep/cli": "0.44.1",
     "@biomejs/biome": "2.5.2",
+    "eslint": "10.12.0",
     "lefthook": "2.1.10",
-    "typescript": "5.9.2"
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2"
   }
 }

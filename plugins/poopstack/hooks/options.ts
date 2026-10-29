@@ -36,35 +36,37 @@ export function readSettings(options: PluginOptions): Settings {
 
 // Whether a /config row is this plugin's row for one of its userConfig fields. The key is
 // `<plugin>.<field>` (the types); the owner is the plugin's name, or that name with a suffix for
-// how it was loaded: `poopstack@inline` under --plugin-dir (measured 2026-10-28, FINDINGS 49), and,
-// judging by a built-in's `cc-plugin-agents-md@builtin`, `<name>@<marketplace>` for an install (not
-// measured). A mod loaded from a session's mods folder has no rows at all (measured).
+// how it was loaded: `poopstack@inline` under --plugin-dir and `<name>@<marketplace>` for an
+// install, `poopstack@poopstack` (both measured 2026-10-28, FINDINGS 49). A mod loaded from a
+// session's mods folder has no rows at all (measured).
 export function isOwnRow(row: ConfigRow, plugin: string, field: string): boolean {
   const owner = row.provider.plugin;
   const isOwner = owner === plugin || owner.startsWith(`${plugin}@`);
   return isOwner && (row.key === `${plugin}.${field}` || row.key === `${owner}.${field}`);
 }
 
-// Turns that get a joke, in the long run (decision 30). Guesses until measured. poopmaxxing is
-// maximum's vocabulary on every turn (decision 78, his ask, 2026-10-28).
-const BY_PRESET: Readonly<Record<Preset, number>> = {
-  discreet: 1 / 10,
-  regular: 1 / 5,
-  maximum: 1 / 3,
+// One joke in this many turns, in the long run (decision 30). Guesses until measured. poopmaxxing
+// is maximum's vocabulary on every turn (decision 78, his ask, 2026-10-28).
+const TURNS_PER_JOKE_BY_PRESET: Readonly<Record<Preset, number>> = {
+  discreet: 10,
+  regular: 5,
+  maximum: 3,
   poopmaxxing: 1,
 };
 
-const BY_ENGAGEMENT: Readonly<Record<Exclude<Engagement, 'by-preset'>, number>> = {
-  rare: 1 / 10,
-  sometimes: 1 / 5,
-  often: 1 / 3,
+const TURNS_PER_JOKE_BY_ENGAGEMENT: Readonly<Record<Exclude<Engagement, 'by-preset'>, number>> = {
+  rare: 10,
+  sometimes: 5,
+  often: 3,
   always: 1,
 };
 
 export function turnRate(settings: Settings): number {
-  return settings.engagement === 'by-preset'
-    ? BY_PRESET[settings.preset]
-    : BY_ENGAGEMENT[settings.engagement];
+  const turnsPerJoke =
+    settings.engagement === 'by-preset'
+      ? TURNS_PER_JOKE_BY_PRESET[settings.preset]
+      : TURNS_PER_JOKE_BY_ENGAGEMENT[settings.engagement];
+  return 1 / turnsPerJoke;
 }
 
 // Matched lines (the commit line) roll their own dice at about double the turn rate.
@@ -74,5 +76,5 @@ export function matchedRate(settings: Settings): number {
 
 // "about 1 turn in 5", for the status text and the first-run toast.
 export function describeRate(rate: number): string {
-  return rate >= 1 ? 'every turn' : `about 1 turn in ${Math.round(1 / rate)}`;
+  return rate >= 1 ? 'every turn' : `about 1 turn in ${String(Math.round(1 / rate))}`;
 }

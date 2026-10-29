@@ -1,4 +1,4 @@
-import type { ConfigRow } from 'claude-code';
+import type { CommandRunInput, ConfigRow, SessionAppendInput } from 'claude-code';
 import { expect, type MockClock, mock, type TestBody, test } from 'claude-code/testing';
 import { COMMIT_COUNT_KEEP_MS } from '../hooks/commits';
 import {
@@ -185,7 +185,7 @@ function engine(
   });
   on('store.keys', () => ({ value: [...store.keys()] }));
   on('turn.start', (_, e) => ({ turnId: e.turnId }));
-  on('session.append', (_, e, next) => next(e));
+  on('session.append', async (_, e, next) => next(e));
   on('turn.complete', (_, e) => ({ text: e.answer }));
   on('ui.toast', (_, e) => {
     seen.toasts.push(e.text);
@@ -204,7 +204,7 @@ function engine(
     return (
       <Box>
         <Text>{e.props.word}</Text>
-        <Text>{` for ${e.props.durationMs / 1000}s · done 3:40 PM`}</Text>
+        <Text>{` for ${String(e.props.durationMs / 1000)}s · done 3:40 PM`}</Text>
       </Box>
     );
   });
@@ -215,16 +215,22 @@ async function start($: Engine, isInteractive = true): Promise<void> {
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive });
 }
 
-function run(command: string, args: string) {
+// `presentation` is what a headless run reports (no fullscreen, 80 columns: the engine's types).
+function run(command: string, args: string): CommandRunInput {
   return {
     command,
     args,
     origin: { kind: 'composer' },
-    presentation: { source: 'plugin', plugin: 'poopstack' },
-    cwd: '/work',
-    surface: 'terminal',
-    isInteractive: true,
-  } as const;
+    presentation: { isFullscreen: false, columns: 80 },
+  };
+}
+
+// A command's answer text; a missing one fails the test rather than reading as empty.
+function textOf(result: { readonly text?: string | undefined }): string {
+  if (result.text === undefined) {
+    throw new Error('the command answered with no text');
+  }
+  return result.text;
 }
 
 async function spinnerWord(
@@ -232,7 +238,7 @@ async function spinnerWord(
   surface: 'terminal' | 'desktop' | 'vscode',
   word: string,
   message: string | null,
-) {
+): Promise<string | undefined> {
   const ui = await $.ui.mount({ ...SPINNER, surface, props: { ...SPINNER.props, word, message } });
   const text = (await ui.find({ type: 'Text' }))?.text;
   await ui.unmount();
@@ -289,7 +295,7 @@ test(
     const seen = engine(on);
     await start($);
     const result = await $.command.run(run('poop', 'off'));
-    expect(result.text.startsWith('Off.')).toBe(true);
+    expect(textOf(result).startsWith('Off.')).toBe(true);
     expect(seen.configSets).toEqual(['poopstack.enabled=false']);
     expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
   },
@@ -323,12 +329,12 @@ async function turnWithRow(
   reason: Reason,
   isRowFirst = true,
 ): Promise<void> {
-  const row = {
+  const row: SessionAppendInput = {
     message: { type: 'system', name: 'turn_duration', content: [] },
     door: 'notice',
     origin: { kind: 'unclassified' },
     uuid,
-  } as const;
+  };
   const end = { ...TURN_BASE, turnId, isAborted: reason === 'aborted' } as const;
   await $.turn.start({ text: 'go', turnId });
   if (isRowFirst) {
@@ -680,7 +686,7 @@ test(
   async ($, on) => {
     engine(on);
     const answers = [COMMITTED, DENIED, INTERRUPTED, BACKGROUNDED, NOTHING] as const;
-    const sent = answers.map((_, index) => `git commit -m "feat: ${index}"`);
+    const sent = answers.map((_, index) => `git commit -m "feat: ${String(index)}"`);
     const received: string[] = [];
     // The stand-in answers each call by the number in its command, so the calls may overlap.
     on('tool.call', (_, e) => {
@@ -690,7 +696,7 @@ test(
     });
     await start($);
     const returned = await Promise.all(
-      sent.map((command) => $.tool.call({ tool: 'Bash', command })),
+      sent.map(async (command) => $.tool.call({ tool: 'Bash', command })),
     );
     expect(returned).toEqual([...answers]);
     expect([...received].sort()).toEqual(sent);
@@ -819,8 +825,8 @@ test(
     engine(on, () => 'poopstack', SEEN_BEFORE, { savedAs: true });
     await start($);
     const result = await $.command.run(run('poop', 'off'));
-    expect(result.text.startsWith('Jokes stopped for this session only')).toBe(true);
-    expect(result.text.includes('it was saved as true')).toBe(true);
+    expect(textOf(result).startsWith('Jokes stopped for this session only')).toBe(true);
+    expect(textOf(result).includes('it was saved as true')).toBe(true);
     expect(result.exitCode).toBe(1);
     expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
   },
@@ -833,10 +839,10 @@ test(
     engine(on, () => 'poopstack', SEEN_BEFORE, { savedAs: false });
     await start($);
     const turnedOn = await $.command.run(run('poopstack', 'on'));
-    expect(turnedOn.text.startsWith('Not turned on')).toBe(true);
+    expect(textOf(turnedOn).startsWith('Not turned on')).toBe(true);
     expect(turnedOn.exitCode).toBe(1);
     const preset = await $.command.run(run('poopstack', 'maximum'));
-    expect(preset.text.startsWith('The preset stays regular')).toBe(true);
+    expect(textOf(preset).startsWith('The preset stays regular')).toBe(true);
     expect(preset.exitCode).toBe(1);
   },
 );
@@ -848,7 +854,7 @@ test(
     engine(on, () => 'poopstack', SEEN_BEFORE, { isListFailing: true });
     await start($);
     const result = await $.command.run(run('poop', 'off'));
-    expect(result.text.startsWith('The command failed inside p(oop)stack')).toBe(true);
+    expect(textOf(result).startsWith('The command failed inside p(oop)stack')).toBe(true);
     expect(result.exitCode).toBe(1);
   },
 );
@@ -859,7 +865,7 @@ test(
   async ($, on) => {
     engine(on);
     const writes: string[] = [];
-    on('state.set', (_, e, next) => {
+    on('state.set', async (_, e, next) => {
       writes.push(e.key);
       return next(e);
     });
@@ -951,13 +957,12 @@ test(
   async ($, on) => {
     engine(on);
     await start($);
-    const rowOf = (uuid: string) =>
-      ({
-        message: { type: 'system', name: 'turn_duration', content: [] },
-        door: 'notice',
-        origin: { kind: 'unclassified' },
-        uuid,
-      }) as const;
+    const rowOf = (uuid: string): SessionAppendInput => ({
+      message: { type: 'system', name: 'turn_duration', content: [] },
+      door: 'notice',
+      origin: { kind: 'unclassified' },
+      uuid,
+    });
     const end = (turnId: string) =>
       ({ ...TURN_BASE, turnId, isAborted: false, reason: 'answer' }) as const;
     await $.turn.start({ text: 'go', turnId: 'turn-a' });
@@ -1076,8 +1081,8 @@ test(
     const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { hasNoRows: true });
     await start($);
     const result = await $.command.run(run('poop', 'off'));
-    expect(result.text.startsWith('Jokes stopped for this session only')).toBe(true);
-    expect(result.text.includes('no /config row for poopstack.enabled')).toBe(true);
+    expect(textOf(result).startsWith('Jokes stopped for this session only')).toBe(true);
+    expect(textOf(result).includes('no /config row for poopstack.enabled')).toBe(true);
     expect(result.exitCode).toBe(1);
     expect(seen.configSets).toEqual([]);
     expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');

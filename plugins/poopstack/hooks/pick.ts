@@ -3,27 +3,35 @@
 
 export type Draw = { readonly state: number; readonly value: number };
 
+// mulberry32's published constants: the state's step, its three shifts and its odd multiplier.
+const MULBERRY32 = { step: 0x6d2b79f5, shiftA: 15, shiftB: 7, odd: 61, shiftC: 14 } as const;
+const UINT32_RANGE = 4_294_967_296;
+
 // One step of mulberry32: the next generator state and a number in [0, 1).
 export function nextRandom(state: number): Draw {
-  const next = (state + 0x6d2b79f5) >>> 0;
-  let t = Math.imul(next ^ (next >>> 15), next | 1);
-  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-  return { state: next, value: ((t ^ (t >>> 14)) >>> 0) / 4294967296 };
+  const next = (state + MULBERRY32.step) >>> 0;
+  let t = Math.imul(next ^ (next >>> MULBERRY32.shiftA), next | 1);
+  t ^= t + Math.imul(t ^ (t >>> MULBERRY32.shiftB), t | MULBERRY32.odd);
+  return { state: next, value: ((t ^ (t >>> MULBERRY32.shiftC)) >>> 0) / UINT32_RANGE };
 }
+
+// FNV-1a's published 32-bit offset basis and prime.
+const FNV_OFFSET_BASIS = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
 
 // FNV-1a over UTF-16 code units: a stable 32-bit number for an id.
 export function hashId(id: string): number {
-  let hash = 0x811c9dc5;
+  let hash = FNV_OFFSET_BASIS;
   for (let i = 0; i < id.length; i += 1) {
-    hash = Math.imul(hash ^ id.charCodeAt(i), 0x01000193) >>> 0;
+    hash = Math.imul(hash ^ id.charCodeAt(i), FNV_PRIME) >>> 0;
   }
   return hash;
 }
 
 // The engagement dice are a pseudo-random distribution: the n-th roll since the last hit hits
 // with chance min(1, c × n), so jokes come at a steady rate without long droughts or clumps.
-function chanceAt(constant: number, roll: number): number {
-  return Math.min(1, constant * roll);
+function chanceAt(constant: number, rollNumber: number): number {
+  return Math.min(1, constant * rollNumber);
 }
 
 // How many rolls the dice keep going past, at most, before every roll is a sure hit.
@@ -35,22 +43,30 @@ function horizon(constant: number): number {
 export function prdRate(constant: number): number {
   let survive = 1;
   let expected = 0;
-  for (let roll = 1; roll <= horizon(constant); roll += 1) {
-    const chance = chanceAt(constant, roll);
-    expected += roll * survive * chance;
+  for (let rollNumber = 1; rollNumber <= horizon(constant); rollNumber += 1) {
+    const chance = chanceAt(constant, rollNumber);
+    expected += rollNumber * survive * chance;
     survive *= 1 - chance;
   }
   return 1 / expected;
 }
 
+// The lowest engagement rate the dice take, and the bisection's bounds: 60 halvings of [0.0001, 1]
+// leave the constant exact to well under one part in 10^15.
+const MIN_RATE = 0.01;
+const LOWEST_CONSTANT = 0.0001;
+const BISECTION_STEPS = 60;
+
 // The constant whose long-run hit rate is `rate`, by bisection (prdRate rises with it).
 export function prdConstant(rate: number): number {
-  if (!(rate >= 0.01 && rate <= 1)) {
-    throw new Error(`poopstack: an engagement rate must lie in [0.01, 1], not ${rate}`);
+  if (!(rate >= MIN_RATE && rate <= 1)) {
+    throw new Error(
+      `poopstack: an engagement rate must lie in [${String(MIN_RATE)}, 1], not ${String(rate)}`,
+    );
   }
-  let low = 0.0001;
+  let low = LOWEST_CONSTANT;
   let high = 1;
-  for (let step = 0; step < 60; step += 1) {
+  for (let step = 0; step < BISECTION_STEPS; step += 1) {
     const middle = (low + high) / 2;
     if (prdRate(middle) < rate) {
       low = middle;

@@ -44,7 +44,7 @@ const IRREGULAR_PAST = new Set([
 ]);
 
 function isPastWord(word: string | undefined): boolean {
-  return word !== undefined && (/ed$/.test(word) || IRREGULAR_PAST.has(word));
+  return word !== undefined && (word.endsWith('ed') || IRREGULAR_PAST.has(word));
 }
 
 test('every line is plain ASCII within its column cap, with no ellipsis of its own', () => {
@@ -63,10 +63,19 @@ test('every line is plain ASCII within its column cap, with no ellipsis of its o
 test('no line uses a cut word, a reserved word, an alarming word or a shell shape', () => {
   for (const entry of ENTRIES) {
     for (const text of [entry.working, entry.done]) {
-      expect({ text, cut: CUT.test(text) }).toEqual({ text, cut: false });
-      expect({ text, reserved: RESERVED.test(text) }).toEqual({ text, reserved: false });
-      expect({ text, alarming: ALARMING.test(text) }).toEqual({ text, alarming: false });
-      expect({ text, shell: SHELL_SHAPE.test(text) }).toEqual({ text, shell: false });
+      expect({ text, hasCutWord: CUT.test(text) }).toEqual({ text, hasCutWord: false });
+      expect({ text, hasReservedWord: RESERVED.test(text) }).toEqual({
+        text,
+        hasReservedWord: false,
+      });
+      expect({ text, hasAlarmingWord: ALARMING.test(text) }).toEqual({
+        text,
+        hasAlarmingWord: false,
+      });
+      expect({ text, isShellShaped: SHELL_SHAPE.test(text) }).toEqual({
+        text,
+        isShellShaped: false,
+      });
     }
   }
 });
@@ -82,15 +91,18 @@ test('a working line is a present participle; a done line reads before "for 42s"
     const [first, second] = entry.working.split(' ');
     expect({
       line: entry.working,
-      ok: /ing$/.test(first ?? '') || /ing$/.test(second ?? ''),
+      isParticiple: first?.endsWith('ing') === true || second?.endsWith('ing') === true,
     }).toEqual({
       line: entry.working,
-      ok: true,
+      isParticiple: true,
     });
     const [pastFirst, pastSecond] = entry.done.split(' ');
-    expect({ line: entry.done, ok: isPastWord(pastFirst) || isPastWord(pastSecond) }).toEqual({
+    expect({
       line: entry.done,
-      ok: true,
+      isPastForm: isPastWord(pastFirst) || isPastWord(pastSecond),
+    }).toEqual({
+      line: entry.done,
+      isPastForm: true,
     });
     // "for" inside the line would read "… for X for 42s".
     expect({ line: entry.done, hasFor: /\bfor\b/i.test(entry.done) }).toEqual({

@@ -1,7 +1,14 @@
 import { expect, test } from 'claude-code/testing';
 import { commitKind } from '../hooks/git';
 
-const bash = (gitOperation?: unknown) => ({
+type BashStub = {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly interrupted: boolean;
+  readonly gitOperation?: unknown;
+};
+
+const bash = (gitOperation?: unknown): BashStub => ({
   stdout: '',
   stderr: '',
   interrupted: false,
