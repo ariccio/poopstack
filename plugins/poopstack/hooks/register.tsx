@@ -12,6 +12,7 @@ import { COMMIT_COUNT_PREFIX, commitCountKey, isStale, readCount } from './commi
 import { commitKind } from './git';
 import {
   describeRate,
+  isOwnRow,
   isPreset,
   matchedRate,
   type Preset,
@@ -508,12 +509,9 @@ async function setOption(
   value: boolean | string,
 ): Promise<string | null> {
   const rows = await $.config.list();
-  const row = rows.find(
-    (candidate) =>
-      candidate.provider.plugin === $.plugin.name && candidate.key.endsWith(`.${field}`),
-  );
+  const row = rows.find((candidate) => isOwnRow(candidate, $.plugin.name, field));
   if (row === undefined) {
-    return `no /config row named ${field} was found for ${$.plugin.name}`;
+    return `Claude Code lists no /config row for ${$.plugin.name}.${field} here, as for a mod loaded from a session's mods folder`;
   }
   const outcome = await $.config.set({ key: row.key, value });
   if (outcome.deny !== undefined) {

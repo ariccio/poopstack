@@ -1,4 +1,4 @@
-import type { PluginOptions } from 'claude-code';
+import type { ConfigRow, PluginOptions } from 'claude-code';
 
 // The mod's settings, read once from `register(on, options)`. The engine validates the values
 // against plugin.json's `userConfig` and fills defaults before the module loads, so a value of
@@ -32,6 +32,17 @@ export function readSettings(options: PluginOptions): Settings {
     );
   }
   return { isEnabled, preset, engagement };
+}
+
+// Whether a /config row is this plugin's row for one of its userConfig fields. The key is
+// `<plugin>.<field>` (the types); the owner is the plugin's name, or that name with a suffix for
+// how it was loaded: `poopstack@inline` under --plugin-dir (measured 2026-10-28, FINDINGS 49), and,
+// judging by a built-in's `cc-plugin-agents-md@builtin`, `<name>@<marketplace>` for an install (not
+// measured). A mod loaded from a session's mods folder has no rows at all (measured).
+export function isOwnRow(row: ConfigRow, plugin: string, field: string): boolean {
+  const owner = row.provider.plugin;
+  const isOwner = owner === plugin || owner.startsWith(`${plugin}@`);
+  return isOwner && (row.key === `${plugin}.${field}` || row.key === `${owner}.${field}`);
 }
 
 // Turns that get a joke, in the long run (decision 30). Guesses until measured.

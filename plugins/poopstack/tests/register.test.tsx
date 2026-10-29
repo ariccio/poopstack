@@ -1,3 +1,4 @@
+import type { ConfigRow } from 'claude-code';
 import { expect, type MockClock, mock, type TestBody, test } from 'claude-code/testing';
 import { COMMIT_COUNT_KEEP_MS } from '../hooks/commits';
 import {
@@ -67,16 +68,51 @@ function latch(): { readonly promise: Promise<void>; readonly open: () => void }
 // value to on its way in; `isListFailing` and `isStoreSetFailing` make that call throw (the kit
 // then rejects it); `countReadsAs` is what every commit count reads as; `countReadGate` holds a
 // commit count's read open until the test releases it, so the test can act in between, and
-// `firstRunSetGate` does the same for the first-run flag's write.
+// `firstRunSetGate` does the same for the first-run flag's write. `rowOwner` names who owns the
+// mod's /config rows (`poopstack@inline` when not given); `hasNoRows` lists none, as a session
+// that loaded the mod from its mods folder did.
 type StandIn = {
   readonly savedAs?: boolean | string;
   readonly isListFailing?: boolean;
   readonly isStoreSetFailing?: boolean;
   readonly countReadsAs?: unknown;
   readonly countReadGate?: Gate;
+  readonly rowOwner?: string;
+  readonly hasNoRows?: boolean;
   readonly firstRunSetGate?: Gate;
 };
 type Gate = { readonly entered: () => void; readonly released: Promise<void> };
+
+// The /config rows as an interactive --plugin-dir session listed them (FINDINGS 49), beside a row
+// of another plugin's: keys `poopstack.<field>`, owned by `poopstack@inline`.
+function configRows(config: StandIn): ConfigRow[] {
+  if (config.hasNoRows === true) {
+    return [];
+  }
+  const owner = { plugin: config.rowOwner ?? 'poopstack@inline', tier: 'user' } as const;
+  const other = { plugin: 'other@inline', tier: 'user' } as const;
+  const row = { label: '', isLocked: false } as const;
+  return [
+    { ...row, key: 'other.enabled', kind: 'boolean', value: true, provider: other },
+    { ...row, key: 'poopstack.enabled', kind: 'boolean', value: true, provider: owner },
+    {
+      ...row,
+      key: 'poopstack.preset',
+      kind: 'choice',
+      value: 'regular',
+      options: ['discreet', 'regular', 'maximum'],
+      provider: owner,
+    },
+    {
+      ...row,
+      key: 'poopstack.engagement',
+      kind: 'choice',
+      value: 'by-preset',
+      options: ['by-preset', 'rare', 'sometimes', 'often', 'always'],
+      provider: owner,
+    },
+  ];
+}
 
 // Nothing sits beneath the mod: these hooks stand for the engine. The two lines draw the word
 // they were handed, so a test reads what the mod passed on. `holder` names who registered each
@@ -105,16 +141,7 @@ function engine(
     if (config.isListFailing === true) {
       throw new Error('the config list failed');
     }
-    return {
-      value: ['enabled', 'preset', 'engagement'].map((field) => ({
-        key: `poopstack.${field}`,
-        label: field,
-        kind: 'boolean',
-        value: true,
-        provider: { plugin: 'poopstack', tier: 'user' },
-        isLocked: false,
-      })),
-    };
+    return { value: configRows(config) };
   });
   on('config.set', (_, e) => {
     seen.configSets.push(`${e.key}=${String(e.value)}`);
@@ -1017,5 +1044,33 @@ test(
     });
     await $.turn.complete(end('turn-b', 'answer'));
     expect(DONE.has(await closingText($, 'row-b'))).toBe(true);
+  },
+);
+
+test(
+  '/poopstack maximum saves the preset to the row an inline-loaded mod owns',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on);
+    await start($);
+    const result = await $.command.run(run('poopstack', 'maximum'));
+    expect(result.text).toBe('Preset is now maximum: jokes on every turn.');
+    expect(result.exitCode).toBe(undefined);
+    expect(seen.configSets).toEqual(['poopstack.preset=maximum']);
+  },
+);
+
+test(
+  'with no /config row for the mod, off stops jokes for the session and says why it was not saved',
+  { options: ALWAYS },
+  async ($, on) => {
+    const seen = engine(on, () => 'poopstack', SEEN_BEFORE, { hasNoRows: true });
+    await start($);
+    const result = await $.command.run(run('poop', 'off'));
+    expect(result.text.startsWith('Jokes stopped for this session only')).toBe(true);
+    expect(result.text.includes('no /config row for poopstack.enabled')).toBe(true);
+    expect(result.exitCode).toBe(1);
+    expect(seen.configSets).toEqual([]);
+    expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
   },
 );
