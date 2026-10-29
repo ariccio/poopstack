@@ -10,7 +10,7 @@ A Claude Code mod that swaps the whimsical spinner words for bathroom puns, with
 /plugin install poopstack --marketplace ariccio/poopstack
 ```
 
-Built and tested on Claude Code 2.1.311.
+Built and tested on Claude Code 2.1.312.
 
 ## Turn it down or off
 
