@@ -41,8 +41,12 @@ export function readSettings(options: PluginOptions): Settings {
 // session's mods folder has no rows at all (measured).
 export function isOwnRow(row: ConfigRow, plugin: string, field: string): boolean {
   const owner = row.provider.plugin;
-  const isOwner = owner === plugin || owner.startsWith(`${plugin}@`);
-  return isOwner && (row.key === `${plugin}.${field}` || row.key === `${owner}.${field}`);
+  const loadedPrefix = `${plugin}@`;
+  const isOwner = owner === plugin || owner.startsWith(loadedPrefix);
+  const pluginKey = `${plugin}.${field}`;
+  const ownerKey = `${owner}.${field}`;
+  const isFieldKey = row.key === pluginKey || row.key === ownerKey;
+  return isOwner && isFieldKey;
 }
 
 // One joke in this many turns, in the long run (decision 30). Guesses until measured. poopmaxxing
@@ -71,10 +75,17 @@ export function turnRate(settings: Settings): number {
 
 // Matched lines (the commit line) roll their own dice at about double the turn rate.
 export function matchedRate(settings: Settings): number {
-  return Math.min(1, 2 * turnRate(settings));
+  const rate = turnRate(settings);
+  const doubled = 2 * rate;
+  return Math.min(1, doubled);
 }
 
 // "about 1 turn in 5", for the status text and the first-run toast.
 export function describeRate(rate: number): string {
-  return rate >= 1 ? 'every turn' : `about 1 turn in ${String(Math.round(1 / rate))}`;
+  if (rate >= 1) {
+    return 'every turn';
+  }
+  const turnsPerJoke = 1 / rate;
+  const rounded = Math.round(turnsPerJoke);
+  return `about 1 turn in ${String(rounded)}`;
 }

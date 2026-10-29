@@ -47,5 +47,6 @@ export function readCount(held: unknown): StoredCount {
 }
 
 export function isStale(count: CommitCount, now: number): boolean {
-  return now - count.at > COMMIT_COUNT_KEEP_MS;
+  const age = now - count.at;
+  return age > COMMIT_COUNT_KEEP_MS;
 }

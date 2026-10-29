@@ -168,7 +168,8 @@ export function labelFits(columns: number | undefined, word: string, label: stri
   if (columns === undefined) {
     return true;
   }
-  return word.length + LINE_TAIL_COLUMNS + LABEL_GAP.length + label.length <= columns;
+  const lineWidth = word.length + LINE_TAIL_COLUMNS + LABEL_GAP.length + label.length;
+  return lineWidth <= columns;
 }
 
 const RANK: Readonly<Record<Preset, number>> = {
@@ -189,7 +190,12 @@ export function poolFor(preset: Preset): readonly Entry[] {
 // The past form that pairs with a turn's phrase, or null when the turn was plain or the phrase
 // is not in the preset's pool (the spinner then showed Claude Code's own word).
 export function doneFor(phrase: string | null, preset: Preset): string | null {
-  return poolFor(preset).find((entry) => entry.working === phrase)?.done ?? null;
+  const pool = poolFor(preset);
+  const entry = pool.find((candidate) => candidate.working === phrase);
+  if (entry === undefined) {
+    return null;
+  }
+  return entry.done;
 }
 
 // Whether a closing line's stored word may show under the preset in force now: a switch to a
@@ -201,10 +207,12 @@ export function isShownNow(word: string, preset: Preset): boolean {
   if (word === ERROR_WORD) {
     return preset !== 'discreet';
   }
-  return poolFor(preset).some((entry) => entry.done === word);
+  const pool = poolFor(preset);
+  return pool.some((entry) => entry.done === word);
 }
 
 // `shown` counts the commit jokes this session showed before this one.
 export function commitLine(shown: number, preset: Preset): string {
-  return shown === 1 && preset !== 'discreet' ? COMMIT_SECOND : COMMIT_FIRST;
+  const isSecondJoke = shown === 1 && preset !== 'discreet';
+  return isSecondJoke ? COMMIT_SECOND : COMMIT_FIRST;
 }

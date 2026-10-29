@@ -25,5 +25,8 @@ export function commitKind(result: unknown): CommitKind | null {
     return null;
   }
   const { kind } = commit;
-  return kind === 'committed' || kind === 'amended' ? kind : null;
+  if (kind === 'committed' || kind === 'amended') {
+    return kind;
+  }
+  return null;
 }

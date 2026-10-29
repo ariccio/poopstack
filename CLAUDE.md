@@ -40,3 +40,24 @@ puns, without ever hiding what Claude is really doing. The design contract is
   `pnpm lint:types` fails on any file outside the type check.
 - Commit subjects are conventional (`feat(scope): …`); the commit-msg hook checks them.
 - Never bypass the hooks (`--no-verify` is denied in `.claude/settings.json`).
+
+## Code style (the maintainer's ask, 2026-10-29)
+
+He finds nested expressions and chained async calls hard to read, so the code takes one
+operation per step, each step's value with a name that says what it holds:
+
+- Break a nested expression into named single steps (`hooks/pick.ts`'s `nextRandom` is the
+  model). A chain of one operator (`a + b + c`), a comparison or `&&`/`||`/`!` in a condition, a
+  template literal that formats a message, and a short callback to an array method stay whole.
+- Every `await` is its own statement: never inside a member access, a call's arguments, a
+  condition, an operator or a template. A `$.state.get` result is named `<key>Read` (the
+  engine's `StateRead`) before its `.value` is used.
+- Name an array before handing it on: `const reads = keys.map(async …)`, then
+  `await Promise.all(reads)` (Biome forbids an `await` inside a loop).
+- A state whose fields allow combinations that cannot happen becomes a union with a `stage` or
+  `kind` field (`Pairing` in `hooks/register.tsx`). TypeScript `enum` is unavailable
+  (`erasableSyntaxOnly`).
+- No clarifying parentheses: Biome's formatter removes them (decision 81).
+- A hook passed to `on(...)` is written inside the call or declared at the top of the file; the
+  engine refuses one bound to a `const` inside `register`.
+- Not yet enforced by a gate; the rules that could enforce it are being measured.
