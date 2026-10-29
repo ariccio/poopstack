@@ -582,13 +582,32 @@ async function answer($: EngineInterface, settings: Settings, args: string): Pro
 }
 
 // The answer to one of the mod's own names, or null for a name another plugin holds.
+// Whether a name is this plugin's, read from the command list when the command runs. Names
+// registered during session.start are listed only after it ends (measured 2026-10-28: the list
+// held none of the five right after their registrations resolved, so an installed copy answered
+// none of its commands), so the list at session.start cannot settle it. `owned` keeps the answer
+// for the commands' catch, which cannot wait for the list.
+async function isOwnCommand($: EngineInterface, command: string): Promise<boolean> {
+  const listed = await $.command.list();
+  const isOwn = listed.some(
+    (entry) =>
+      entry.name === command && entry.source === 'plugin' && entry.plugin === $.plugin.name,
+  );
+  if (isOwn) {
+    owned.add(command);
+  } else {
+    owned.delete(command);
+  }
+  return isOwn;
+}
+
 async function answerOwn(
   $: EngineInterface,
   settings: Settings,
   command: string,
   args: string,
 ): Promise<Answer | null> {
-  if (!owned.has(command)) {
+  if (!(await isOwnCommand($, command))) {
     return null;
   }
   return await answer($, settings, args);
@@ -609,8 +628,8 @@ function failedOrPass<E extends { readonly command: string }, R>(
   return owned.has(e.command) ? Promise.resolve({ text: FAILED, exitCode: FAILED_EXIT }) : next(e);
 }
 
-// Each visible name (decision 35) is registered by its literal name; a name another plugin or
-// Claude Code already holds is refused, and the mod then leaves that name to its owner.
+// Each visible name (decision 35) is registered by its literal name. A name the command list shows
+// held by another plugin, when the command runs, is left to its owner (`isOwnCommand`).
 async function registerCommands($: EngineInterface): Promise<void> {
   await Promise.allSettled([
     $.command.register({
@@ -644,12 +663,6 @@ async function registerCommands($: EngineInterface): Promise<void> {
       immediate: true,
     }),
   ]);
-  owned.clear();
-  for (const command of await $.command.list()) {
-    if (command.source === 'plugin' && command.plugin === $.plugin.name) {
-      owned.add(command.name);
-    }
-  }
 }
 
 export const register: Register = (on, options) => {
