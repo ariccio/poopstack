@@ -893,7 +893,7 @@ async function passOn<E, R>(_$: unknown, e: E, next: (e: E) => Promise<R>): Prom
 // Each visible name (decision 35) is registered by its literal name. A name the command list shows
 // held by another plugin, when the command runs, is left to its owner (`isOwnCommand`).
 async function registerCommands($: EngineInterface): Promise<void> {
-  await Promise.allSettled([
+  const registrations = [
     $.command.register({
       name: 'poopstack',
       description: DESCRIPTION,
@@ -924,7 +924,8 @@ async function registerCommands($: EngineInterface): Promise<void> {
       argumentHint: HINT,
       immediate: true,
     }),
-  ]);
+  ];
+  await Promise.allSettled(registrations);
 }
 
 export const register: Register = (on, options) => {
