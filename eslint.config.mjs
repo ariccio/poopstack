@@ -102,6 +102,9 @@ export default tseslint.config(
       // JSON-shaped store value needs.
       '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
       '@typescript-eslint/prefer-readonly': 'error',
+      // `ignoreInferredTypes`: a callback's parameter takes the engine's type by inference (a
+      // `$.command.list()` entry), which the mod cannot make read-only. `treatMethodsAsReadonly`: a
+      // method is not mutable state, so the engine's method-bearing objects count as read-only.
       '@typescript-eslint/prefer-readonly-parameter-types': [
         'error',
         { allow: ENGINE_TYPES, ignoreInferredTypes: true, treatMethodsAsReadonly: true },
