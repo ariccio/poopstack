@@ -17,6 +17,9 @@ pre-commit:
     typecheck:
       glob: "*.{ts,tsx}"
       run: pnpm typecheck
+    lint-types:
+      glob: "*.{ts,tsx,mjs}"
+      run: pnpm lint:types
     secret-scan-staged:
       run: pnpm security:gitleaks:staged
 
@@ -38,11 +41,13 @@ pre-push:
       run: pnpm check:ast
     5_typecheck:
       run: pnpm typecheck
-    6_plugin-validate:
+    6_lint-types:
+      run: pnpm lint:types
+    7_plugin-validate:
       run: pnpm plugin:validate
-    7_plugin-test:
+    8_plugin-test:
       run: pnpm plugin:test
-    8_secret-scan:
+    9_secret-scan:
       run: pnpm security:gitleaks
 
 post-checkout:

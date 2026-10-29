@@ -84,7 +84,7 @@ test('the bag shows every phrase once before any repeats, and never the same one
   let state = 3;
   for (let cycle = 0; cycle < 50; cycle += 1) {
     const seen = new Set<string>();
-    for (let i = 0; i < pool.length; i += 1) {
+    for (const _turn of pool) {
       const drawn = drawPhrase(bag, pool, last, state);
       expect(drawn.phrase === last).toBe(false);
       seen.add(drawn.phrase);

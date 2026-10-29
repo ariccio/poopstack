@@ -101,5 +101,18 @@
         "useErrorMessage": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["plugins/poopstack/**"],
+      "linter": {
+        "rules": {
+          "complexity": { "useLiteralKeys": "off", "useOptionalChain": "off" },
+          "correctness": { "noInvalidUseBeforeDeclaration": "off" },
+          "style": { "useExportType": "off", "useThrowOnlyError": "off" },
+          "suspicious": { "useAwait": "off" }
+        }
+      }
+    }
+  ]
 }

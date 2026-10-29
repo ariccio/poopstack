@@ -11,7 +11,9 @@ export const COMMIT_COUNT_PREFIX = 'commitJokes.';
 
 // A bound on the store's growth, chosen, not measured: a count untouched for this long is removed
 // when a later session starts, and a session resumed after that starts its pair again.
-export const COMMIT_COUNT_KEEP_MS: number = 30 * 24 * 60 * 60 * 1000;
+const KEEP_DAYS = 30;
+const DAY_MS = 86_400_000;
+export const COMMIT_COUNT_KEEP_MS: number = KEEP_DAYS * DAY_MS;
 
 export type CommitCount = { readonly shown: number; readonly at: number };
 
