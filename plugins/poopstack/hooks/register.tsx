@@ -258,7 +258,10 @@ async function closingWord(
 }
 
 // Claude Code's own closing line, as drawn with the paired word, and the label after it (feature
-// row 8) unless the line refuses one or the measured width would wrap it.
+// row 8) unless the line refuses one or the measured width would wrap it. The engine's line fills
+// its row, a box around it did not shrink it, and it opens with a blank row (his screenshots,
+// 2026-10-28), so the label sits at the right end of the closing line: aligned to the row's bottom,
+// in a box that does not shrink, so it stays whole.
 function withLabel(
   $: EngineInterface,
   e: RenderInput<'TurnDuration'>,
@@ -272,9 +275,11 @@ function withLabel(
   }
   const { Box, Text } = $.ui.resolve(e);
   return (
-    <Box>
+    <Box alignItems="flex-end">
       {drawn}
-      <Text dimColor>{`${LABEL_GAP}${label}`}</Text>
+      <Box flexShrink={0}>
+        <Text dimColor>{`${LABEL_GAP}${label}`}</Text>
+      </Box>
     </Box>
   );
 }
