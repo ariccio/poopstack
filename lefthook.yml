@@ -1,0 +1,56 @@
+# Git hooks for the p(oop)stack repository. Install: pnpm install, then pnpm hooks:install.
+# Every tool runs from node_modules through pnpm, or through scripts/quality/require-tool.zsh,
+# so a missing tool fails the hook loudly instead of skipping it.
+#
+# Worktrees share one hooks folder (the main checkout's .git/hooks), so these hooks also run
+# in the main checkout; run `pnpm install` there too before committing or merging there.
+
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,tsx,js,mjs,json,jsonc}"
+      run: pnpm exec biome check --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+    ast-grep:
+      glob: "*.{ts,tsx}"
+      run: pnpm check:ast
+    typecheck:
+      glob: "*.{ts,tsx}"
+      run: pnpm typecheck
+    secret-scan-staged:
+      run: pnpm security:gitleaks:staged
+
+commit-msg:
+  commands:
+    validate-message:
+      run: zsh scripts/git/validate-commit-message.zsh {1}
+
+pre-push:
+  piped: true # an earlier failure stops the later commands
+  commands:
+    1_lefthook-validate:
+      run: pnpm exec lefthook validate
+    2_script-tests:
+      run: pnpm test:scripts
+    3_lint:
+      run: pnpm lint
+    4_ast-grep:
+      run: pnpm check:ast
+    5_typecheck:
+      run: pnpm typecheck
+    6_plugin-validate:
+      run: pnpm plugin:validate
+    7_plugin-test:
+      run: pnpm plugin:test
+    8_secret-scan:
+      run: pnpm security:gitleaks
+
+post-checkout:
+  commands:
+    git-improvements:
+      run: zsh scripts/git/git-improvements.zsh
+
+post-merge:
+  commands:
+    git-improvements:
+      run: zsh scripts/git/git-improvements.zsh

@@ -1,0 +1,34 @@
+{
+  "name": "poopstack",
+  "displayName": "p(oop)stack",
+  "version": "0.1.0",
+  "description": "Claude Code's progress words, as bathroom puns that never hide what Claude is really doing.",
+  "author": { "name": "Alexander Riccio" },
+  "homepage": "https://github.com/ariccio/poopstack",
+  "repository": "https://github.com/ariccio/poopstack",
+  "license": "MIT",
+  "keywords": ["claude-code-mod", "humor", "spinner"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "p(oop)stack jokes",
+      "description": "Off: Claude Code's own words everywhere. /poopstack off and /poopstack on change it too.",
+      "default": true
+    },
+    "preset": {
+      "type": "string",
+      "title": "p(oop)stack preset",
+      "description": "discreet: euphemisms and plumbing words, no body words, no toilet mark. regular: plain bathroom words. maximum: the crude ones too. poopmaxxing: maximum on every turn.",
+      "default": "regular",
+      "options": ["discreet", "regular", "maximum", "poopmaxxing"]
+    },
+    "engagement": {
+      "type": "string",
+      "title": "p(oop)stack joke rate",
+      "description": "How many turns get a joke. by-preset: discreet about 1 in 10, regular about 1 in 5, maximum about 1 in 3, poopmaxxing every turn. rare 1 in 10, sometimes 1 in 5, often 1 in 3, always every turn.",
+      "default": "by-preset",
+      "options": ["by-preset", "rare", "sometimes", "often", "always"]
+    }
+  }
+}

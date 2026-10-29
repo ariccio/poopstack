@@ -1,0 +1,13 @@
+id: no-empty-catch-tsx
+language: Tsx
+severity: error
+message: "empty catch block swallows the error entirely — rethrow, return a typed error, or pass the event on unchanged; never mask a failure"
+note: >-
+  The Tsx twin of no-empty-catch (ast-grep parses .tsx files as their own language, so a TypeScript rule never sees them).
+  Error handling (.claude/rules/error-handling.md): an empty catch is the purest swallow. KNOWN LIMIT: a comment-only body (`catch { /* ignored */ }`) is not matched, because ast-grep parses the comment as a node; that shape falls to review and to no-catch-swallow's scope note.
+files:
+  - "plugins/**/*.tsx"
+rule:
+  any:
+    - pattern: "try { $$$BODY } catch { }"
+    - pattern: "try { $$$BODY } catch ($E) { }"

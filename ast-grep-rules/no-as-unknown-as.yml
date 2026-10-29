@@ -1,0 +1,12 @@
+id: no-as-unknown-as
+language: TypeScript
+severity: error
+message: "`as unknown as T` double cast bypasses every type check — validate the value and narrow it instead"
+note: >-
+  Type honesty (.claude/rules/error-handling.md): a double cast bypasses every check the types would have made; validate the value instead.
+files:
+  - "plugins/**/*.ts"
+rule:
+  any:
+    - pattern: $EXPR as unknown as $TYPE
+    - pattern: ($EXPR as unknown) as $TYPE

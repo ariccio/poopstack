@@ -1,0 +1,11 @@
+id: no-ts-ignore
+language: TypeScript
+severity: error
+message: "`@ts-ignore` silently disables the type checker with no record and no expiry — use `@ts-expect-error <reason>`, which carries a justification and fails loudly once the underlying error is fixed"
+note: >-
+  Suppression hygiene (.claude/rules/error-handling.md). `@ts-ignore` masks a real type failure with no reason and no expiry; `@ts-expect-error <reason>` carries a justification and fails loudly once the error it covers is gone. Anchored to the comment start, so prose that mentions the token is not flagged.
+files:
+  - "plugins/**/*.ts"
+rule:
+  kind: comment
+  regex: "^(//|/\\*+)\\s*@ts-ignore"
