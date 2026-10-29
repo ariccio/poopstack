@@ -23,6 +23,7 @@ A Claude Code mod that replaces the whimsical spinner words and the turn-closing
 | `discreet` | work-safe: no emoji, no body jokes | about 1 turn in 10 | the plain text `p(oop)stack` |
 | `regular` | the default | about 1 turn in 5 | "🚽 p(oop)stack" |
 | `maximum` | opt-in, the silliest | about 1 turn in 3 | "🚽 p(oop)stack" |
+| `poopmaxxing` | maximum, every time (his ask, 2026-10-28) | every turn | "🚽 p(oop)stack" |
 
 - The rates are guesses until measured. An `engagement` setting (`by-preset`, `rare`, `sometimes`, `often`, `always`) overrides them.
 - Plain turns are left exactly as Claude Code draws them. Whether the mod is on always shows in `/poopstack` status.

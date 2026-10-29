@@ -4,7 +4,7 @@ import type { ConfigRow, PluginOptions } from 'claude-code';
 // against plugin.json's `userConfig` and fills defaults before the module loads, so a value of
 // the wrong shape here is a broken invariant of ours: it throws, and the engine names the plugin.
 
-export const PRESETS = ['discreet', 'regular', 'maximum'] as const;
+export const PRESETS = ['discreet', 'regular', 'maximum', 'poopmaxxing'] as const;
 export type Preset = (typeof PRESETS)[number];
 
 export const ENGAGEMENTS = ['by-preset', 'rare', 'sometimes', 'often', 'always'] as const;
@@ -45,11 +45,13 @@ export function isOwnRow(row: ConfigRow, plugin: string, field: string): boolean
   return isOwner && (row.key === `${plugin}.${field}` || row.key === `${owner}.${field}`);
 }
 
-// Turns that get a joke, in the long run (decision 30). Guesses until measured.
+// Turns that get a joke, in the long run (decision 30). Guesses until measured. poopmaxxing is
+// maximum's vocabulary on every turn (decision 78, his ask, 2026-10-28).
 const BY_PRESET: Readonly<Record<Preset, number>> = {
   discreet: 1 / 10,
   regular: 1 / 5,
   maximum: 1 / 3,
+  poopmaxxing: 1,
 };
 
 const BY_ENGAGEMENT: Readonly<Record<Exclude<Engagement, 'by-preset'>, number>> = {

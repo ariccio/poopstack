@@ -576,7 +576,9 @@ async function answer($: EngineInterface, settings: Settings, args: string): Pro
   if (isPreset(verb)) {
     return setPreset($, settings, verb);
   }
-  return { text: `Unknown word "${verb}". Try on, off, discreet, regular, maximum or status.` };
+  return {
+    text: `Unknown word "${verb}". Try on, off, discreet, regular, maximum, poopmaxxing or status.`,
+  };
 }
 
 // The answer to one of the mod's own names, or null for a name another plugin holds.
@@ -592,10 +594,10 @@ async function answerOwn(
   return await answer($, settings, args);
 }
 
-const DESCRIPTION = 'p(oop)stack: on, off, discreet, regular, maximum, or status';
+const DESCRIPTION = 'p(oop)stack: on, off, discreet, regular, maximum, poopmaxxing, or status';
 const FAILED =
   'The command failed inside p(oop)stack (the transcript names the error); /poopstack status shows where it stands.';
-const HINT = '[on|off|discreet|regular|maximum|status]';
+const HINT = '[on|off|discreet|regular|maximum|poopmaxxing|status]';
 
 // The catch of each command hook: a failure inside the mod's own command says so, and fails a
 // headless run, instead of passing on; a name the mod does not hold passes on to its owner.

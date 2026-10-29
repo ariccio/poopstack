@@ -1,6 +1,7 @@
 import type { ConfigRow } from 'claude-code';
 import { expect, test } from 'claude-code/testing';
-import { isOwnRow } from '../hooks/options';
+import { isOwnRow, matchedRate, turnRate } from '../hooks/options';
+import { poolFor } from '../hooks/vocabulary';
 
 function row(key: string, owner: string): ConfigRow {
   return {
@@ -28,4 +29,13 @@ test("another plugin's row, a look-alike name or another field is not the mod's"
     isOwnRow(row('poopstack-probe.preset', 'poopstack-probe@inline'), 'poopstack', 'preset'),
   ).toBe(false);
   expect(isOwnRow(row('poopstack.enabled', 'poopstack@inline'), 'poopstack', 'preset')).toBe(false);
+});
+
+test('poopmaxxing is maximum on every turn, unless a joke rate is set', () => {
+  const settings = { isEnabled: true, preset: 'poopmaxxing', engagement: 'by-preset' } as const;
+  expect(turnRate(settings)).toBe(1);
+  expect(matchedRate(settings)).toBe(1);
+  expect(turnRate({ ...settings, engagement: 'rare' })).toBe(1 / 10);
+  expect(turnRate({ ...settings, preset: 'maximum' })).toBe(1 / 3);
+  expect(poolFor('poopmaxxing')).toEqual(poolFor('maximum'));
 });

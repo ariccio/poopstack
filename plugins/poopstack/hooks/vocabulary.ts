@@ -4,7 +4,8 @@ import type { Preset } from './options';
 // while a turn runs ("Constipondering…"); `done` is a durative past form for a closing line,
 // which the engine draws as "<done> for 42s · done 7:16 PM". `tier` is the lowest preset that
 // shows the entry: discreet keeps to euphemism and plumbing words with no body word, regular
-// adds plain and implied bodily words, maximum adds the crude ones.
+// adds plain and implied bodily words, maximum adds the crude ones. poopmaxxing shows what maximum
+// shows; it differs only in its rate (options.ts).
 //
 // Sources: the ChatGPT conversation of 2026-10-19 (its ranked 500), the writers' research of
 // 2026-10-20 and two of his own suggestions ("Pooping", "Straining"). Every entry passed the
@@ -170,7 +171,12 @@ export function labelFits(columns: number | undefined, word: string, label: stri
   return word.length + LINE_TAIL_COLUMNS + LABEL_GAP.length + label.length <= columns;
 }
 
-const RANK: Readonly<Record<Preset, number>> = { discreet: 0, regular: 1, maximum: 2 };
+const RANK: Readonly<Record<Preset, number>> = {
+  discreet: 0,
+  regular: 1,
+  maximum: 2,
+  poopmaxxing: 3,
+};
 
 export function isShownAt(entry: Entry, preset: Preset): boolean {
   return RANK[entry.tier] <= RANK[preset];

@@ -1074,3 +1074,17 @@ test(
     expect(await spinnerWord($, 'terminal', 'Pollinating', null)).toBe('Pollinating');
   },
 );
+
+test(
+  '/poopstack poopmaxxing saves the new level, and status says it jokes on every turn',
+  { options: { enabled: true, preset: 'poopmaxxing', engagement: 'by-preset' } },
+  async ($, on) => {
+    const seen = engine(on);
+    await start($);
+    const status = await $.command.run(run('poopstack', 'status'));
+    expect(status.text).toBe('On · poopmaxxing · jokes on every turn.');
+    const result = await $.command.run(run('poopstack', 'poopmaxxing'));
+    expect(result.text).toBe('Preset is now poopmaxxing: jokes on every turn.');
+    expect(seen.configSets).toEqual(['poopstack.preset=poopmaxxing']);
+  },
+);

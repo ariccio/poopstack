@@ -16,6 +16,7 @@ Built and tested on Claude Code 2.1.312.
 
 - `/poopstack discreet`: work-safe words, no emoji, about 1 turn in 10.
 - `/poopstack regular` (the default) or `/poopstack maximum` (the silliest, about 1 turn in 3).
+- `/poopstack poopmaxxing`: maximum, on every turn.
 - `/poopstack off` (or `/poop off`): stops every joke at once and saves the setting. `/poopstack on` brings them back; `/poopstack status` says where it stands.
 - To disable it, run this in a terminal:
 
